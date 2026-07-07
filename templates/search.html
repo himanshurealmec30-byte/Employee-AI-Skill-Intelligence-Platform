@@ -1,0 +1,293 @@
+{% extends "base.html" %}
+{% block title %}Talent Search - TalentBeacon{% endblock %}
+{% block content %}
+<h2 class="page-title">Talent Search</h2>
+
+<div class="row g-4 mb-4">
+    <div class="col-md-5">
+        <div class="panel-card">
+            <h5>Paste Project Description</h5>
+            <textarea id="nlpText" class="form-control mb-3" rows="10" placeholder="Looking for a Senior Data Scientist with 5+ years of experience. Must know Python, SQL, Machine Learning, and AWS."></textarea>
+            <button class="btn btn-primary w-100" onclick="extractNlp()">Extract Requirements (NLP)</button>
+        </div>
+    </div>
+    <div class="col-md-7">
+        <div class="panel-card" id="nlpOutput">
+            <p class="text-muted">NLP engine extracts skills, experience, certifications, and domain from text using trained TF-IDF vocabulary.</p>
+        </div>
+    </div>
+</div>
+
+<div class="panel-card search-workbench">
+    <div class="row g-3 align-items-end">
+        <div class="col-lg-6">
+            <label class="form-label">Project</label>
+            <select id="searchProject" class="form-select">
+                <option value="">All active employees</option>
+                {% for project in projects %}
+                <option value="{{ project.id }}">{{ project.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-lg-6">
+            <label class="form-label">Target Role</label>
+            <select id="searchRole" class="form-select">
+                <option value="">No target role</option>
+                {% for role in roles %}
+                <option value="{{ role }}">{{ role }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12">
+            <button id="talentSearchButton" class="btn btn-primary w-100" onclick="searchTalent()">
+                <i class="bi bi-search"></i> Search and Analyze Talent
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="panel-card mt-4" id="searchResults">
+    <div class="result-state">
+        <i class="bi bi-search"></i>
+        <strong>Search active employee file</strong>
+        <span>Click an employee to open Skill Gap and NLP Analysis directly below that employee.</span>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let latestNlpSkills = [];
+
+async function extractNlp() {
+    const text = document.getElementById('nlpText').value.trim();
+    const out = document.getElementById('nlpOutput');
+    if (!text) {
+        out.innerHTML = '<div class="alert alert-warning mb-0">Please paste a project description first.</div>';
+        return;
+    }
+    out.innerHTML = '<div class="result-state"><span class="spinner-border spinner-border-sm"></span> Extracting requirements...</div>';
+    try {
+        const res = await fetch('/api/nlp/parse', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ text })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'NLP extraction failed.');
+        renderNlpRequirements(data);
+    } catch (error) {
+        out.innerHTML = `<div class="alert alert-danger mb-0">${escapeText(error.message)}</div>`;
+    }
+}
+
+function renderNlpRequirements(data) {
+    const skills = data.skills || [];
+    const certs = data.certifications || [];
+    const matches = data.matches || [];
+    latestNlpSkills = skills;
+    document.getElementById('nlpOutput').innerHTML = `
+        <h5>Extracted Requirements</h5>
+        <p><strong>Domain:</strong> ${escapeText(data.domain || 'General Software Engineering')}</p>
+        <p><strong>NLP Confidence:</strong> ${Math.round(Number(data.confidence || 0) * 100)}%</p>
+        <p><strong>Min Experience:</strong> ${Number(data.min_experience || 0)} years</p>
+        <p><strong>Skills:</strong> ${skills.length ? skills.map(s => `<span class="skill-chip skill-chip-match" title="Confidence: ${Math.round(Number((data.skill_confidences || {})[s] || 0) * 100)}%">${escapeText(s)} ${Math.round(Number((data.skill_confidences || {})[s] || 0) * 100)}%</span>`).join('') : 'None detected'}</p>
+        <p><strong>Certifications:</strong> ${certs.map(escapeText).join(', ') || 'None detected'}</p>
+        <hr>
+        <h6>Top Matches</h6>
+        ${matches.length ? `<div class="talent-list">${matches.map(renderNlpMatchCard).join('')}</div>` : '<p class="text-muted mb-0">No active uploaded employees matched these requirements.</p>'}
+    `;
+}
+
+function renderNlpMatchCard(match) {
+    const employeeId = Number(match.employee_id);
+    const skillCoverage = Number(match.skill_coverage || 0);
+    const overallScore = Number(match.match_score || 0);
+    const scoreReason = renderScoreReason(match.score_breakdown);
+    const missing = (match.missing_skills || []).length
+        ? `<div class="small text-danger">Missing: ${(match.missing_skills || []).map(escapeText).join(', ')}</div>`
+        : `<div class="small text-success">Complete skill coverage (${skillCoverage.toFixed(0)}%)</div>`;
+    return `<div class="talent-item" id="nlp-employee-${employeeId}">
+        <button class="talent-row" onclick="loadNlpEmployeeDetail(${employeeId})">
+            <div>
+                <div class="fw-semibold">Employee #${employeeId}</div>
+                <div class="text-muted small">${escapeText(match.designation || 'Employee')} | ${escapeText(match.department || '')}</div>
+                ${missing}
+                ${scoreReason}
+            </div>
+            <div class="match-ring" style="--score:${overallScore}">
+                <strong>${overallScore.toFixed(0)}%</strong>
+                <span>overall</span>
+            </div>
+        </button>
+        <div class="employee-inline-detail d-none" id="nlp-detail-${employeeId}"></div>
+    </div>`;
+}
+
+function renderScoreReason(breakdown) {
+    if (!breakdown || !breakdown.reason) return '';
+    return `<div class="score-sum small mt-2">
+        <strong>Why this percentage?</strong> ${escapeText(breakdown.reason)}
+    </div>`;
+}
+
+async function loadNlpEmployeeDetail(employeeId) {
+    const detail = document.getElementById(`nlp-detail-${employeeId}`);
+    if (!detail.classList.contains('d-none') && detail.innerHTML.trim()) {
+        detail.classList.add('d-none');
+        detail.innerHTML = '';
+        return;
+    }
+    document.querySelectorAll('.employee-inline-detail').forEach(node => {
+        if (node !== detail) {
+            node.classList.add('d-none');
+            node.innerHTML = '';
+        }
+    });
+    detail.classList.remove('d-none');
+    detail.innerHTML = '<div class="result-state result-state-compact"><span class="spinner-border spinner-border-sm"></span> Loading employee analysis...</div>';
+    const params = new URLSearchParams({ skill: latestNlpSkills.join(',') });
+    try {
+        const res = await fetch(`/api/employee/${employeeId}/intelligence?${params}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Employee details failed.');
+        detail.innerHTML = renderEmployeeDetail(data);
+    } catch (error) {
+        detail.innerHTML = `<div class="alert alert-danger mb-0">${escapeText(error.message)}</div>`;
+    }
+}
+
+async function searchTalent() {
+    const el = document.getElementById('searchResults');
+    const button = document.getElementById('talentSearchButton');
+    el.innerHTML = '<div class="result-state"><span class="spinner-border spinner-border-sm"></span> Searching and ranking employees...</div>';
+    button.disabled = true;
+    try {
+        const res = await fetch('/api/search?' + searchParams());
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Talent search failed.');
+        renderResults(data.results || [], data.required_skills || []);
+    } catch (error) {
+        el.innerHTML = `<div class="alert alert-danger mb-0">${escapeText(error.message)}</div>`;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+function renderResults(results, requiredSkills) {
+    const el = document.getElementById('searchResults');
+    if (!results.length) {
+        el.innerHTML = '<div class="result-state"><i class="bi bi-search"></i><strong>No matching employees</strong><span>Select a different project/role or lower performance.</span></div>';
+        return;
+    }
+    const req = requiredSkills.length
+        ? `<div class="mb-3"><span class="text-muted small">Project/role skills used:</span><div class="mt-1">${requiredSkills.map(s => `<span class="skill-chip">${escapeText(s)}</span>`).join('')}</div></div>`
+        : '';
+    el.innerHTML = `${req}<div class="d-flex justify-content-between mb-3"><strong>${results.length} employees found</strong><span class="text-muted small">Active dataset only</span></div>
+        <div class="talent-list">${results.map(renderEmployeeCard).join('')}</div>`;
+}
+
+function renderEmployeeCard(r) {
+    const missing = (r.missing_skills || []).length
+        ? `<div class="small text-danger">Missing: ${(r.missing_skills || []).map(escapeText).join(', ')}</div>`
+        : '<div class="small text-success">No project/role skill gap for this selection</div>';
+    return `<div class="talent-item" id="employee-${Number(r.employee_id)}">
+        <button class="talent-row" onclick="loadEmployeeDetail(${Number(r.employee_id)})">
+            <div>
+                <div class="fw-semibold">${escapeText(r.name)} <span class="text-muted">#${r.employee_id}</span></div>
+                <div class="text-muted small">${escapeText(r.email || 'No email')} | ${escapeText(r.designation)} | ${escapeText(r.department)}</div>
+                <div class="small">${escapeText(r.education)} | ${r.years_of_experience} yrs exp | Performance ${r.performance_score}/5</div>
+                ${missing}
+            </div>
+            <div class="match-ring" style="--score:${Number(r.skill_match_percentage || 0)}">
+                <strong>${Number(r.skill_match_percentage || 0)}%</strong>
+                <span>match</span>
+            </div>
+        </button>
+        <div class="employee-inline-detail d-none" id="employee-detail-${Number(r.employee_id)}"></div>
+    </div>`;
+}
+
+async function loadEmployeeDetail(employeeId) {
+    const detail = document.getElementById(`employee-detail-${employeeId}`);
+    if (!detail.classList.contains('d-none') && detail.innerHTML.trim()) {
+        detail.classList.add('d-none');
+        detail.innerHTML = '';
+        return;
+    }
+    document.querySelectorAll('.employee-inline-detail').forEach(node => {
+        if (node.id !== `employee-detail-${employeeId}`) {
+            node.classList.add('d-none');
+            node.innerHTML = '';
+        }
+    });
+    detail.classList.remove('d-none');
+    detail.innerHTML = '<div class="result-state result-state-compact"><span class="spinner-border spinner-border-sm"></span> Loading employee analysis...</div>';
+    try {
+        const res = await fetch(`/api/employee/${employeeId}/intelligence?` + searchParams());
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Employee details failed.');
+        detail.innerHTML = renderEmployeeDetail(data);
+    } catch (error) {
+        detail.innerHTML = `<div class="alert alert-danger mb-0">${escapeText(error.message)}</div>`;
+    }
+}
+
+function renderEmployeeDetail(data) {
+    const emp = data.employee || {};
+    const project = data.project;
+    const projectGap = data.project_gap || {};
+    const roleGap = data.role_gap || {};
+    const learning = data.learning_recommendations || [];
+    return `
+        <div class="inline-detail-grid">
+            <div class="detail-section detail-section-clean">
+                <h5 class="mb-1">${escapeText(emp.name)} <span class="text-muted">#${emp.employee_id}</span></h5>
+                <div class="text-muted small">${escapeText(emp.email || 'No email in file')}</div>
+                <div class="small">${escapeText(emp.designation)} | ${escapeText(emp.department)} | ${escapeText(emp.education)} | ${emp.years_of_experience} yrs</div>
+                <div class="mt-3">${(data.skills || []).map(s => `<span class="skill-chip">${escapeText(s)}</span>`).join('') || '<span class="text-muted">No skills found.</span>'}</div>
+                <div class="mt-2"><strong>Certifications:</strong> ${(data.certifications || []).map(escapeText).join(', ') || '<span class="text-muted">No certifications in file.</span>'}</div>
+            </div>
+            <div class="detail-section detail-section-clean">
+                <h5>Skill Gap</h5>
+                ${project ? renderGapBlock(`Project: ${escapeText(project.name)}`, projectGap) : ''}
+                ${roleGap.role_name ? renderGapBlock(`Role: ${escapeText(roleGap.role_name)}`, roleGap) : ''}
+                ${!project && !roleGap.role_name ? '<p class="text-muted mb-0">Select a project or role to calculate required skill gaps.</p>' : ''}
+            </div>
+            <div class="detail-section detail-section-clean">
+                <h5>Suggested Certifications and Videos</h5>
+                <div class="learning-list">
+                    ${learning.length ? learning.slice(0, 12).map(item => `<a href="${escapeAttr(item.url)}" target="_blank" rel="noopener">${escapeText(item.source)} - ${escapeText(item.title)}</a>`).join('') : '<span class="text-muted">No missing skills for this selection.</span>'}
+                </div>
+            </div>
+        </div>`;
+}
+
+function renderGapBlock(title, gap) {
+    if (!gap || !(gap.required_skills || []).length) return '';
+    return `<div class="gap-block">
+        <div class="d-flex justify-content-between align-items-center">
+            <strong>${title}</strong>
+            <span class="score-pill">${Number(gap.match_percentage || 0)}%</span>
+        </div>
+        <div class="small mt-2"><span class="text-success">Matched:</span> ${(gap.matched_skills || []).map(escapeText).join(', ') || 'None'}</div>
+        <div class="small"><span class="text-danger">Required:</span> ${(gap.missing_skills || []).map(escapeText).join(', ') || 'Complete'}</div>
+    </div>`;
+}
+
+function searchParams() {
+    return new URLSearchParams({
+        project_id: document.getElementById('searchProject').value,
+        role_name: document.getElementById('searchRole').value,
+    });
+}
+
+function escapeText(value) { const div = document.createElement('div'); div.textContent = String(value || ''); return div.innerHTML; }
+function escapeAttr(value) { return escapeText(value).replace(/"/g, '&quot;'); }
+
+const initial = new URLSearchParams(window.location.search);
+document.getElementById('searchProject').value = initial.get('project_id') || '';
+document.getElementById('searchRole').value = initial.get('role_name') || '';
+if (initial.toString()) searchTalent();
+</script>
+{% endblock %}

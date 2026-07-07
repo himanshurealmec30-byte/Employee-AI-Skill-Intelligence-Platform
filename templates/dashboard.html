@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - TalentBeacon{% endblock %}
+{% block content %}
+<h2 class="page-title">Workforce Intelligence Dashboard</h2>
+{% if analytics.needs_upload %}
+<div class="alert alert-info d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <div>
+        {% if user.role in ['admin', 'hr'] %}
+        <strong>Start here:</strong> upload an employee CSV/Excel file, activate it, then create a project and run matching.
+        {% elif user.role == 'manager' %}
+        <strong>No workforce data yet:</strong> ask Admin/HR to upload and activate employee files before running project matching.
+        {% else %}
+        <strong>No profile data yet:</strong> ask Admin/HR to finish onboarding your employee profile.
+        {% endif %}
+    </div>
+    {% if user.role in ['admin', 'hr'] %}
+    <a class="btn btn-sm btn-primary" href="{{ url_for('admin_datasets_page') }}">Upload Employee File</a>
+    {% endif %}
+</div>
+{% endif %}
+<div class="row g-4">
+    <div class="col-md-3">
+        <div class="kpi-card">
+            <div class="kpi-label">Total Employees</div>
+            <div class="kpi-value">{{ analytics.total_employees or 0 }}</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="kpi-card">
+            <div class="kpi-label">Avg Performance</div>
+            <div class="kpi-value">{{ analytics.avg_performance or 0 }}/5</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="kpi-card">
+            <div class="kpi-label">Avg Experience</div>
+            <div class="kpi-value">{{ analytics.avg_experience or 0 }} yrs</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="kpi-card">
+            <div class="kpi-label">Target Roles</div>
+            <div class="kpi-value">{{ 0 if analytics.needs_upload else ((analytics.roles_available or [])|length) }}</div>
+        </div>
+    </div>
+</div>
+
+{% if user.role in ['admin', 'hr'] %}
+<div class="row g-4 mt-2">
+    <div class="col-md-3">
+        <div class="kpi-card">
+            <div class="kpi-label">Uploaded Employees</div>
+            <div class="kpi-value">{{ upload_summary.active_row_count or analytics.total_employees or 0 }}</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="kpi-card">
+            <div class="kpi-label">Employee Files</div>
+            <div class="kpi-value">{{ upload_summary.uploaded_datasets or 0 }}</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="kpi-card">
+            <div class="kpi-label">Projects</div>
+            <div class="kpi-value">{{ 0 if analytics.needs_upload else (projects|length if projects else 0) }}</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="kpi-card">
+            <div class="kpi-label">Top Match</div>
+            <div class="kpi-value">{{ upload_summary.best_match_score or 0 }}%</div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="row g-4 mt-2">
+    <div class="col-lg-8">
+        <div class="panel-card">
+            <div class="chart-heading"><div><h5 class="mb-1">Workforce Skills</h5><span>Click a bar to discover employees with that skill</span></div></div>
+            {% if analytics.needs_upload %}
+            <div class="result-state">
+                <i class="bi bi-bar-chart"></i>
+                <strong>0 employees</strong>
+                <span>Upload an employee file to show workforce skills.</span>
+            </div>
+            {% else %}
+            <div class="chart-frame"><canvas id="skillsChart"></canvas></div>
+            {% endif %}
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="panel-card">
+            <h5>Quick Actions</h5>
+            <div class="d-grid gap-2">
+                {% if user.role in ['admin', 'manager'] %}
+                <a href="{{ url_for('recommendations') }}" class="btn btn-outline-primary">Employee Matching</a>
+                <a href="{{ url_for('projects_page') }}" class="btn btn-outline-primary">Project Matching</a>
+                <a href="{{ url_for('search_page') }}" class="btn btn-outline-primary">Talent Search</a>
+                {% endif %}
+                <a href="{{ url_for('career_page') }}" class="btn btn-outline-primary">Career Paths</a>
+                {% if user.role in ['admin', 'hr'] %}
+                <a href="{{ url_for('admin_datasets_page') }}" class="btn btn-outline-success">Upload Employee File</a>
+                <a href="{{ url_for('admin_users_page') }}" class="btn btn-outline-success">Create User</a>
+                {% endif %}
+                {% if user.role == 'admin' %}
+                <a href="{{ url_for('ml_training_page') }}" class="btn btn-outline-success">ML Training Metrics</a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if user.role in ['admin', 'hr'] and not analytics.needs_upload %}
+<div class="row g-4 mt-2">
+    <div class="col-md-6">
+        <div class="panel-card">
+            <h5>Recent Employee File Uploads</h5>
+            {% if recent_datasets %}
+            <table class="table table-sm">
+                <thead><tr><th>File</th><th>Rows</th><th>Uploaded</th></tr></thead>
+                <tbody>
+                {% for item in recent_datasets %}
+                <tr><td>{{ item.filename }}</td><td>{{ item.row_count }}</td><td>{{ item.uploaded_at }}</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-muted">No uploaded employee files yet.</p>
+            {% endif %}
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="panel-card">
+            <h5>Recent Projects</h5>
+            {% if projects %}
+            <table class="table table-sm">
+                <thead><tr><th>Project</th><th>Skills</th><th>Top Match</th><th></th></tr></thead>
+                <tbody>
+                {% for item in projects[:5] %}
+                <tr>
+                    <td>{{ item.name }}</td>
+                    <td class="small">{{ item.required_skills }}</td>
+                    <td>{{ item.top_match or 0 }}%</td>
+                    <td><a class="btn btn-sm btn-outline-primary" href="{{ url_for('project_matches_page', project_id=item.id) }}">Matches</a></td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-muted">No projects yet.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const topSkills = {{ analytics.top_skills | tojson if analytics.top_skills else '[]' }};
+if (topSkills.length) {
+    const skillsCanvas = document.getElementById('skillsChart');
+    new Chart(skillsCanvas, {
+        type: 'bar',
+        data: {
+            labels: topSkills.map(s => s.skill),
+            datasets: [{ label: 'Employees', data: topSkills.map(s => s.count), backgroundColor: '#176b87', hoverBackgroundColor: '#22a699', borderRadius: 4 }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { intersect: false, mode: 'index' },
+            plugins: { legend: { display: false }, tooltip: { displayColors: false, callbacks: { label: ctx => `${ctx.raw} employees` } } },
+            scales: { y: { beginAtZero: true, grid: { color: '#e9eef3' } }, x: { grid: { display: false } } },
+            onClick: (_, elements) => { if (elements.length) window.location.href = `/search?skill=${encodeURIComponent(topSkills[elements[0].index].skill)}`; }
+        }
+    });
+}
+</script>
+{% endblock %}

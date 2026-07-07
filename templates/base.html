@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}TalentBeacon{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark app-navbar">
+        <div class="container-fluid nav-inner">
+            <a class="navbar-brand fw-bold" href="{{ url_for('career_page') if user.role == 'employee' else url_for('dashboard') }}">
+                <i class="bi bi-broadcast-pin"></i> TalentBeacon
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="nav">
+                <ul class="navbar-nav main-nav me-auto">
+                    {% if user.role != 'employee' %}
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
+                    {% endif %}
+                    {% if user.role in ['admin', 'manager'] %}
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('recommendations') }}">Matching</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('projects_page') }}">Projects</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('search_page') }}">Talent Search</a></li>
+                    {% endif %}
+                    {% if user.role in ['admin', 'hr'] %}
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('analytics_page') }}">Analytics</a></li>
+                    {% endif %}
+                    {% if user.role != 'employee' %}
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('career_page') }}">Career</a></li>
+                    {% endif %}
+                    {% if user.role in ['admin', 'hr'] %}
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('admin_datasets_page') }}">Employee Files</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('admin_users_page') }}">Users</a></li>
+                    {% endif %}
+                    {% if user.role == 'admin' %}
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('ml_training_page') }}">ML</a></li>
+                    {% endif %}
+                </ul>
+                <span class="navbar-text user-chip">
+                    <span class="badge bg-primary role-badge">{{ user.role|upper }}</span>
+                    <span class="username-text">{{ user.username }}</span>
+                </span>
+                <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm logout-btn">Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container-fluid app-main">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }} alert-dismissible fade show {% if message == 'The uploaded file is empty' %}upload-empty-alert{% endif %}">{{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+        {% endfor %}
+        {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

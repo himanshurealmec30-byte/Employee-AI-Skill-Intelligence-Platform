@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Employee Matching - TalentBeacon{% endblock %}
+{% block content %}
+<h2 class="page-title">Employee Matching Engine</h2>
+<div class="row g-4">
+    <div class="col-md-4">
+        <div class="panel-card">
+            <h5>Match by Target Role</h5>
+            <select id="roleSelect" class="form-select mb-3">
+                {% for role in roles %}
+                <option value="{{ role }}">{{ role }}</option>
+                {% endfor %}
+            </select>
+            <button class="btn btn-primary w-100" onclick="matchByRole()">Get Top 10 Matches</button>
+            <hr>
+            <h5>Match by Project Skills</h5>
+            <input type="text" id="projectSkills" class="form-control mb-2" placeholder="Python, SQL, AWS">
+            <input type="number" id="minExp" class="form-control mb-2" placeholder="Min experience" value="0">
+            <button class="btn btn-secondary w-100" onclick="matchByProject()">Match Project</button>
+        </div>
+    </div>
+    <div class="col-md-8">
+        <div class="panel-card">
+            <h5>Recommended Employees</h5>
+            <div id="matchResults"><p class="text-muted">Select a role or enter project skills to see recommendations.</p></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let activeRequestedSkills = [];
+async function matchByRole() {
+    activeRequestedSkills = [];
+    const role = document.getElementById('roleSelect').value;
+    const res = await fetch(`/api/match/role/${encodeURIComponent(role)}?limit=10`);
+    const data = await res.json();
+    renderResults(data.recommendations);
+}
+
+async function matchByProject() {
+    const skills = document.getElementById('projectSkills').value.split(',').map(s => s.trim()).filter(Boolean);
+    activeRequestedSkills = skills;
+    const minExp = parseInt(document.getElementById('minExp').value) || 0;
+    const res = await fetch('/api/match/project', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ skills, min_experience: minExp })
+    });
+    const data = await res.json();
+    renderResults(data.recommendations);
+}
+
+function renderResults(recs) {
+    const el = document.getElementById('matchResults');
+    if (!recs || !recs.length) { el.innerHTML = '<p class="text-muted">No employees meet the minimum skill coverage and experience.</p>'; return; }
+    el.innerHTML = `<div class="talent-list">${recs.map((r,i) => `
+        <div class="talent-item" id="match-employee-${Number(r.employee_id)}">
+            <button class="talent-row" onclick="toggleEmployeeDetails('match', ${Number(r.employee_id)})">
+                <div class="recommendation-main">
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <div class="fw-semibold">#${r.employee_id}</div>
+                        <span class="rank-pill">Rank ${i + 1}</span>
+                        <span class="explain-badge">${Number(r.skill_coverage || r.skill_similarity || 0).toFixed(0)}% skill fit</span>
+                    </div>
+                    <div class="text-muted small">${escapeValue(r.department)} | ${escapeValue(r.designation || '')}</div>
+                    ${renderMatchSummary(r)}
+                    ${renderMiniFactors(r.score_breakdown)}
+                    <div class="small">${prioritizedProjectSkills(r.skills).map(s=>`<span class="skill-chip ${activeRequestedSkills.some(q=>skillKey(q)===skillKey(s))?'skill-chip-match':''}">${escapeValue(s)}</span>`).join('')}</div>
+                </div>
+                <div class="match-ring" style="--score:${Number(r.match_score || 0)}"><strong>${Number(r.match_score || 0)}%</strong><span>match</span></div>
+            </button>
+            <div class="employee-inline-detail d-none" id="match-detail-${Number(r.employee_id)}"></div>
+        </div>
+    `).join('')}</div>`;
+}
+
+function renderMatchSummary(r) {
+    const matched = (r.matched_skills || []).map(escapeValue).join(', ') || 'None';
+    const missing = (r.missing_skills || []).map(escapeValue).join(', ') || 'Complete';
+    const reason = r.score_breakdown && r.score_breakdown.reason ? `<div class="explain-reason">${escapeValue(r.score_breakdown.reason)}</div>` : '';
+    return `<div class="match-explain-grid">
+        <div class="small"><span class="text-success fw-semibold">Matched:</span> ${matched}</div>
+        <div class="small"><span class="text-danger fw-semibold">Missing:</span> ${missing}</div>
+        ${reason}
+    </div>`;
+}
+
+function renderMiniFactors(breakdown) {
+    const factors = (breakdown && (breakdown.parts || breakdown.score_factors)) || [];
+    if (!factors.length) return '';
+    return `<div class="mini-factor-grid">
+        ${factors.map(item => {
+            const score = Number(item.score || 0);
+            const contribution = Number(item.contribution || 0);
+            const weight = Number(item.weight || 0);
+            return `<div class="mini-factor" title="${escapeValue(item.label)} contributes ${contribution.toFixed(1)} out of ${weight}">
+                <div class="mini-factor-top"><span>${escapeValue(item.label)}</span><strong>${score.toFixed(0)}%</strong></div>
+                <div class="mini-factor-track"><span style="width:${Math.max(0, Math.min(100, score))}%"></span></div>
+            </div>`;
+        }).join('')}
+    </div>`;
+}
+
+async function toggleEmployeeDetails(scope, employeeId) {
+    const detail = document.getElementById(`${scope}-detail-${employeeId}`);
+    if (!detail.classList.contains('d-none') && detail.innerHTML.trim()) {
+        detail.classList.add('d-none');
+        detail.innerHTML = '';
+        return;
+    }
+    document.querySelectorAll('.employee-inline-detail').forEach(node => {
+        if (node !== detail) { node.classList.add('d-none'); node.innerHTML = ''; }
+    });
+    detail.classList.remove('d-none');
+    detail.innerHTML = '<div class="result-state result-state-compact"><span class="spinner-border spinner-border-sm"></span> Loading employee details...</div>';
+    const role = document.getElementById('roleSelect').value;
+    const params = new URLSearchParams({
+        role_name: activeRequestedSkills.length ? '' : role,
+        skill: activeRequestedSkills.join(',')
+    });
+    try {
+        const res = await fetch(`/api/employee/${employeeId}/intelligence?${params}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Unable to load employee details.');
+        detail.innerHTML = renderInlineEmployeeDetail(data);
+    } catch (error) {
+        detail.innerHTML = `<div class="alert alert-danger mb-0">${escapeValue(error.message)}</div>`;
+    }
+}
+
+function renderInlineEmployeeDetail(data) {
+    const emp = data.employee || {};
+    const roleGap = data.role_gap || {};
+    const queryGap = data.query_gap || {};
+    return `<div class="inline-detail-grid">
+        <div class="detail-section detail-section-clean">
+            <h5>${escapeValue(emp.name || 'Employee')} <span class="text-muted">#${emp.employee_id || ''}</span></h5>
+            <div class="small text-muted">${escapeValue(emp.email || 'No email')} | ${escapeValue(emp.designation || '')}</div>
+            <div class="small">${escapeValue(emp.education || 'Unknown')} | ${emp.years_of_experience || 0} yrs | ${escapeValue(emp.department || '')}</div>
+            <div class="mt-2">${(data.skills || []).map(s=>`<span class="skill-chip">${escapeValue(s)}</span>`).join('')}</div>
+        </div>
+        <div class="detail-section detail-section-clean">
+            <h5>Skill Gap</h5>
+            ${renderGapBlock(roleGap.role_name ? `Role: ${escapeValue(roleGap.role_name)}` : 'Selected Skills', roleGap.role_name ? roleGap : queryGap)}
+        </div>
+        <div class="detail-section detail-section-clean">
+            <h5>Visual Score Guide</h5>
+            <p class="small text-muted mb-2">Recommendation score combines skill fit, experience, performance, and certification evidence.</p>
+            ${renderDetailFactorLegend()}
+        </div>
+        <div class="detail-section detail-section-clean">
+            <h5>Suggested Certifications and Videos</h5>
+            <div class="learning-list">${(data.learning_recommendations || []).slice(0, 8).map(item=>`<a href="${escapeValue(item.url)}" target="_blank" rel="noopener">${escapeValue(item.source)} - ${escapeValue(item.title)}</a>`).join('') || '<span class="text-muted">No missing skills for this selection.</span>'}</div>
+        </div>
+    </div>`;
+}
+
+function renderDetailFactorLegend() {
+    return `<div class="factor-legend">
+        <div><strong>Skills</strong><span>40%</span></div>
+        <div><strong>Experience</strong><span>25%</span></div>
+        <div><strong>Performance</strong><span>20%</span></div>
+        <div><strong>Certifications</strong><span>15%</span></div>
+    </div>`;
+}
+
+function renderGapBlock(title, gap) {
+    if (!gap || !(gap.required_skills || []).length) return '<p class="text-muted mb-0">No role or project gap selected.</p>';
+    return `<div class="gap-block"><div class="d-flex justify-content-between"><strong>${title}</strong><span class="score-pill">${Number(gap.match_percentage || 0)}%</span></div>
+        <div class="small mt-2"><span class="text-success">Matched:</span> ${(gap.matched_skills || []).map(escapeValue).join(', ') || 'None'}</div>
+        <div class="small"><span class="text-danger">Required:</span> ${(gap.missing_skills || []).map(escapeValue).join(', ') || 'Complete'}</div></div>`;
+}
+function skillKey(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9+#]/g, ''); }
+function escapeValue(value) { const div=document.createElement('div'); div.textContent=String(value||''); return div.innerHTML; }
+function prioritizedProjectSkills(value) { const all=String(value||'').split(';').filter(Boolean); const wanted=new Set(activeRequestedSkills.map(skillKey)); return [...all.filter(s=>wanted.has(skillKey(s))),...all.filter(s=>!wanted.has(skillKey(s)))].slice(0,10); }
+</script>
+{% endblock %}

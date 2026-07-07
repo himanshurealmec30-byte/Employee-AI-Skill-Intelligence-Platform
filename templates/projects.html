@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Projects - TalentBeacon{% endblock %}
+{% block content %}
+<div class="page-heading">
+    <div><h2 class="page-title mb-1">Projects & Matching</h2><p class="text-muted mb-0">Upload a project document to extract requirements and match employees automatically.</p></div>
+    <span class="active-dataset"><i class="bi bi-database-check"></i> {{ upload_summary.active_row_count or 0 }} active employees</span>
+</div>
+
+<div class="panel-card document-upload mb-4">
+    <div class="row align-items-center g-4">
+        <div class="col-lg-4">
+            <div class="section-icon"><i class="bi bi-file-earmark-arrow-up"></i></div>
+            <h4>Upload Project Document</h4>
+            <p class="text-muted mb-2">PDF, DOC, DOCX, or TXT. TalentBeacon analyzes the full project file, extracts skill requirements, and matches employees from the active dataset.</p>
+            <div class="document-approval"><i class="bi bi-check2-circle"></i> Accepted project files: PDF, DOC, DOCX, TXT</div>
+        </div>
+        <div class="col-lg-8">
+            <form method="post" action="{{ url_for('project_from_document_page') }}" enctype="multipart/form-data" class="row g-3 align-items-end">
+                <div class="col-md-5"><label class="form-label">Project name <span class="text-muted">(optional)</span></label><input name="name" class="form-control" placeholder="Use document title"></div>
+                <div class="col-md-5">
+                    <label class="form-label">Project document</label>
+                    <input type="file" name="project_doc" class="form-control" accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" required>
+                    <div class="form-text">Upload the complete project/SRS file. Matching uses the extracted skills.</div>
+                </div>
+                <div class="col-md-2"><button class="btn btn-primary w-100" type="submit"><i class="bi bi-stars"></i> Extract</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    {% if edit_project %}
+    <div class="col-lg-4">
+        <div class="panel-card">
+            <h5>Review Extracted Requirements</h5>
+            {% if edit_project.source_filename %}<div class="document-tag mb-3"><i class="bi bi-paperclip"></i> {{ edit_project.source_filename }}</div>{% endif %}
+            <form method="post" action="{{ url_for('project_edit_page', project_id=edit_project.id) }}">
+                <label class="form-label">Project Name</label>
+                <input name="name" class="form-control mb-2" value="{{ edit_project.name if edit_project else '' }}" required>
+
+                <label class="form-label">Required Skills</label>
+                <input name="required_skills" class="form-control mb-2" placeholder="Python; SQL; AWS" value="{{ edit_project.required_skills if edit_project else '' }}" required>
+
+                <label class="form-label">Minimum Experience</label>
+                <input name="min_experience" type="number" min="0" class="form-control mb-2" value="{{ edit_project.min_experience if edit_project else 0 }}">
+
+                <label class="form-label">Project Description / Other Requirements</label>
+                <textarea name="description" rows="6" class="form-control mb-3" placeholder="Education, domain, tools, responsibilities">{{ edit_project.description if edit_project else '' }}</textarea>
+
+                <button class="btn btn-primary w-100" type="submit">Update Requirements</button>
+                <a class="btn btn-outline-secondary w-100 mt-2" href="{{ url_for('projects_page') }}">Cancel Edit</a>
+            </form>
+            <hr>
+            <div class="small text-muted">
+                Active file employees available: <strong>{{ upload_summary.active_row_count or 0 }}</strong>
+            </div>
+            {% if user.role in ['admin', 'hr'] and not upload_summary.active_dataset %}
+            <a class="btn btn-outline-success w-100 mt-3" href="{{ url_for('admin_datasets_page') }}">Upload Employee File</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+    <div class="{{ 'col-lg-8' if edit_project else 'col-12' }}">
+        <div class="panel-card">
+            <div class="d-flex justify-content-between align-items-center mb-3"><h5 class="mb-0">Uploaded Projects</h5><span class="text-muted small">{{ projects|length }} projects</span></div>
+            {% if projects %}
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead>
+                        <tr><th>Name</th><th>Skills</th><th>Min Exp</th><th>Top Match</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                    {% for project in projects %}
+                    <tr>
+                        <td><strong>{{ project.name }}</strong><div class="small text-muted">{{ project.created_at }}</div>{% if project.source_filename %}<span class="document-tag"><i class="bi bi-paperclip"></i> {{ project.source_filename }}</span>{% endif %}</td>
+                        <td class="small">{{ project.required_skills }}</td>
+                        <td>{{ project.min_experience }} yrs</td>
+                        <td><span class="badge bg-success">{{ project.top_match or 0 }}%</span></td>
+                        <td>
+                            <div class="d-flex flex-wrap gap-1">
+                                <form method="post" action="{{ url_for('project_matches_page', project_id=project.id) }}">
+                                    <button class="btn btn-sm btn-primary" type="submit">Match</button>
+                                </form>
+                                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('project_matches_page', project_id=project.id) }}">Results</a>
+                                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('project_edit_page', project_id=project.id) }}">Edit</a>
+                                <form method="post" action="{{ url_for('project_delete', project_id=project.id) }}" onsubmit="return confirm('Delete this project?')">
+                                    <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted">No projects yet. Upload a PDF, DOC, DOCX, or TXT project document to start matching employees.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

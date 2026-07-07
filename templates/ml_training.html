@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}ML Training - TalentBeacon{% endblock %}
+{% block content %}
+<h2 class="page-title">ML & NLP Model Training Metrics</h2>
+<p class="text-muted">Run <code>python train_models.py</code> to retrain models. Metrics below show last training run.</p>
+
+{% if metrics %}
+<div class="panel-card mb-4">
+    <div class="row g-3">
+        <div class="col-md-4"><strong>Model Version</strong><div>{{ metrics.version or 'Not versioned' }}</div></div>
+        <div class="col-md-4"><strong>Trained At</strong><div>{{ metrics.trained_at or 'Unknown' }}</div></div>
+        <div class="col-md-4"><strong>Training Dataset</strong><div class="small text-muted">{{ metrics.dataset or 'Default dataset' }}</div></div>
+    </div>
+</div>
+<div class="row g-4">
+    <div class="col-md-6">
+        <div class="panel-card">
+            <h5>NLP — TF-IDF Skill Embedding</h5>
+            <ul>
+                <li>Vocabulary Size: {{ metrics.nlp.vocabulary_size }}</li>
+                <li>TF-IDF Features: {{ metrics.nlp.tfidf_features }}</li>
+                <li>Sample Similarity: {{ metrics.nlp.sample_top_similarity }}</li>
+            </ul>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="panel-card">
+            <h5>ML — Readiness Prediction</h5>
+            <table class="table table-sm">
+                <thead><tr><th>Model</th><th>Metric</th><th>Value</th></tr></thead>
+                <tbody>
+                {% for model, m in metrics.ml.items() %}
+                {% if m is mapping %}
+                {% for k, v in m.items() %}
+                <tr><td>{{ model }}</td><td>{{ k }}</td><td>{{ v }}</td></tr>
+                {% endfor %}
+                {% endif %}
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+<div class="panel-card mt-4">
+    <h5>Algorithms Used (per SRS)</h5>
+    <div class="row">
+        <div class="col-md-4"><strong>NLP:</strong> TF-IDF, Cosine Similarity, Regex NLP Extraction</div>
+        <div class="col-md-4"><strong>ML Classification:</strong> Random Forest, XGBoost, Logistic Regression</div>
+        <div class="col-md-4"><strong>ML Regression:</strong> XGBoost Regressor (Readiness %)</div>
+    </div>
+</div>
+<div class="panel-card mt-4">
+    <h5>Model Version History</h5>
+    {% if registry %}
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead><tr><th>Version</th><th>Trained At</th><th>Best Accuracy</th><th>Best F1</th><th>RMSE</th><th>NLP Vocab</th></tr></thead>
+            <tbody>
+            {% for item in registry %}
+            <tr>
+                <td>{{ item.version }}</td>
+                <td>{{ item.trained_at }}</td>
+                <td>{{ item.best_accuracy }}</td>
+                <td>{{ item.best_f1 }}</td>
+                <td>{{ item.best_rmse }}</td>
+                <td>{{ item.nlp_vocabulary_size }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="text-muted mb-0">No model history yet. Run <code>python train_models.py</code> to create the first version record.</p>
+    {% endif %}
+</div>
+{% else %}
+<div class="alert alert-warning">No training metrics found. Run: <code>python train_models.py</code></div>
+{% endif %}
+{% endblock %}

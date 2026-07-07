@@ -1,0 +1,93 @@
+{
+  "nlp": {
+    "vocabulary_size": 91,
+    "tfidf_features": 91,
+    "alias_count": 32,
+    "sample_top_similarity": 0.45935014833681437,
+    "sample_employee_id": 9
+  },
+  "ml": {
+    "xgboost_regressor": {
+      "mae": 0.0023347374508930615,
+      "rmse": 0.0032389381812894685,
+      "r2": 0.9993341124974674
+    },
+    "xgboost_regressor_cv": {
+      "mae_mean": 0.0043672661658513395,
+      "rmse_mean": 0.0060339301211940035,
+      "r2_mean": 0.9963702955066264
+    },
+    "random_forest_classifier": {
+      "accuracy": 0.9886628876292097,
+      "f1": 0.6565656565656566
+    },
+    "random_forest_classifier_cv": {
+      "accuracy_mean": 0.982992946956973,
+      "f1_mean": 0.45689037828356716
+    },
+    "logistic_regression": {
+      "accuracy": 0.9943314438146049,
+      "f1": 0.8191489361702128
+    },
+    "xgboost_classifier": {
+      "accuracy": 0.9934978326108703,
+      "f1": 0.7914438502673797
+    },
+    "xgboost_classifier_cv": {
+      "accuracy_mean": 0.9882617812184963,
+      "f1_mean": 0.6278735609491666
+    },
+    "training_samples": 29988,
+    "feature_count": 105,
+    "top_regression_features": [
+      {
+        "feature": "years_of_experience",
+        "importance": 0.22499510645866394
+      },
+      {
+        "feature": "req_match_ratio",
+        "importance": 0.2242145538330078
+      },
+      {
+        "feature": "performance_score",
+        "importance": 0.10518746823072433
+      },
+      {
+        "feature": "skill:Node.js",
+        "importance": 0.07075158506631851
+      },
+      {
+        "feature": "skill:JavaScript",
+        "importance": 0.06912550330162048
+      },
+      {
+        "feature": "skill:Python",
+        "importance": 0.06499512493610382
+      },
+      {
+        "feature": "des_match_ratio",
+        "importance": 0.047293540090322495
+      },
+      {
+        "feature": "role:Full Stack Developer",
+        "importance": 0.03696899488568306
+      },
+      {
+        "feature": "skill:SQL",
+        "importance": 0.03101406805217266
+      },
+      {
+        "feature": "role:Cybersecurity Analyst",
+        "importance": 0.02724810317158699
+      },
+      {
+        "feature": "projects_handled",
+        "importance": 0.01695231907069683
+      },
+      {
+        "feature": "num_skills",
+        "importance": 0.016423722729086876
+      }
+    ]
+  }
+}

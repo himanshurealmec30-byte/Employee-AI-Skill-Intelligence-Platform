@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}Project Matches - TalentBeacon{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="page-title mb-0">Project Matches</h2>
+    <a class="btn btn-outline-secondary" href="{{ url_for('projects_page') }}">Back to Projects</a>
+</div>
+
+<div class="panel-card mb-4">
+    <div class="d-flex flex-wrap justify-content-between gap-3">
+        <div>
+            <h5 class="mb-1">{{ project.name if project else 'Project' }}</h5>
+            <div class="text-muted">Skills: {{ project.required_skills if project else '' }} | Min Exp: {{ project.min_experience if project else 0 }} yrs</div>
+            {% if project and project.source_filename %}<span class="document-tag"><i class="bi bi-paperclip"></i> {{ project.source_filename }}</span>{% endif %}
+        </div>
+        <form method="post" action="{{ url_for('project_matches_page', project_id=project_id) }}">
+            <button class="btn btn-primary" type="submit">Run Matching Again</button>
+        </form>
+    </div>
+</div>
+
+<div class="panel-card">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="mb-0">Recommended Employees</h5>
+        <span class="badge bg-secondary" id="resultCount">{{ matches|length }} employees</span>
+    </div>
+    <div id="resultsTable"></div>
+    <div id="pagination" class="pagination-bar d-none">
+        <button id="previousPage" class="btn btn-sm btn-outline-secondary" type="button"><i class="bi bi-chevron-left"></i> Previous</button>
+        <span id="pageStatus" class="small text-muted"></span>
+        <button id="nextPage" class="btn btn-sm btn-outline-secondary" type="button">Next <i class="bi bi-chevron-right"></i></button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const projectId = {{ project_id | tojson }};
+const requiredSkills = {{ (project.required_skills if project else '') | tojson }}.split(/[,;|]/).map(s => s.trim()).filter(Boolean);
+let currentPage = 1;
+
+async function loadMatches(resetPage = false) {
+    if (resetPage) currentPage = 1;
+    const target = document.getElementById('resultsTable');
+    target.innerHTML = '<div class="result-state"><span class="spinner-border spinner-border-sm"></span> Loading matches...</div>';
+    const params = new URLSearchParams();
+    params.set('page', currentPage);
+    params.set('page_size', '50');
+    try {
+        const res = await fetch(`/api/project-matches/${encodeURIComponent(projectId)}?${params}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Unable to load project matches.');
+        renderMatches(data.matches || [], data.total || 0);
+        renderPagination(data.page || 1, data.pages || 1, data.total || 0);
+    } catch (error) {
+        document.getElementById('resultCount').textContent = 'Unavailable';
+        target.innerHTML = `<div class="alert alert-danger mb-0">${escapeHtml(error.message)}</div>`;
+    }
+}
+
+function escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = String(value || '');
+    return div.innerHTML;
+}
+
+function normalizedSkill(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9+#]/g, ''); }
+function visibleSkills(value) {
+    const all = String(value || '').split(';').filter(Boolean);
+    const required = new Set(requiredSkills.map(normalizedSkill));
+    return [...all.filter(s => required.has(normalizedSkill(s))), ...all.filter(s => !required.has(normalizedSkill(s)))].slice(0, 10);
+}
+
+function renderMatches(matches, total) {
+    document.getElementById('resultCount').textContent = `${total} employees`;
+    const el = document.getElementById('resultsTable');
+    if (!matches.length) {
+        el.innerHTML = '<p class="text-muted">No employees meet the project skill coverage and experience requirements.</p>';
+        return;
+    }
+    el.innerHTML = `<div class="talent-list">${matches.map((m, i) => {
+            const skills = visibleSkills(m.skills).map(s => `<span class="skill-chip ${requiredSkills.some(r => normalizedSkill(r) === normalizedSkill(s)) ? 'skill-chip-match' : ''}">${escapeHtml(s)}</span>`).join('');
+            return `<div class="talent-item" id="project-employee-${Number(m.employee_id)}">
+                <button class="talent-row" onclick="toggleProjectEmployee(${Number(m.employee_id)})">
+                    <div>
+                        <div class="fw-semibold">#${m.employee_id} ${escapeHtml(m.name || 'Employee')} <span class="text-muted">Rank ${((currentPage - 1) * 50) + i + 1}</span></div>
+                        <div class="text-muted small">${escapeHtml(m.designation || '')} | ${m.years_of_experience || 0} yrs | ${escapeHtml(m.education_level || 'Unknown')}</div>
+                        <div class="small text-success">Matched: ${(m.matched_skills || m.score_breakdown?.matched_skills || []).map(escapeHtml).join(', ') || 'None'}</div>
+                        <div class="small text-danger">Missing: ${(m.missing_skills || m.score_breakdown?.missing_skills || []).map(escapeHtml).join(', ') || 'Complete'}</div>
+                        <div class="small text-muted">${escapeHtml(m.score_breakdown?.score_explanation || '')}</div>
+                        ${renderMiniFactors(m.score_breakdown)}
+                        <div class="small">${skills}</div>
+                    </div>
+                    <div class="match-ring" style="--score:${Number(m.skill_match_percentage || 0)}"><strong>${Number(m.skill_match_percentage || 0).toFixed(0)}%</strong><span>skills</span></div>
+                </button>
+                <div class="employee-inline-detail d-none" id="project-detail-${Number(m.employee_id)}"></div>
+            </div>`;
+        }).join('')}</div>`;
+}
+
+function renderMiniFactors(breakdown) {
+    const factors = (breakdown && (breakdown.score_factors || breakdown.parts)) || [];
+    if (!factors.length) return '';
+    return `<div class="mini-factor-grid">
+        ${factors.map(item => {
+            const score = Number(item.score || 0);
+            const contribution = Number(item.contribution || 0);
+            const weight = Number(item.weight || 0);
+            return `<div class="mini-factor" title="${escapeHtml(item.label)} contributes ${contribution.toFixed(1)} out of ${weight}">
+                <div class="mini-factor-top"><span>${escapeHtml(item.label)}</span><strong>${score.toFixed(0)}%</strong></div>
+                <div class="mini-factor-track"><span style="width:${Math.max(0, Math.min(100, score))}%"></span></div>
+            </div>`;
+        }).join('')}
+    </div>`;
+}
+
+async function toggleProjectEmployee(employeeId) {
+    const detail = document.getElementById(`project-detail-${employeeId}`);
+    if (!detail.classList.contains('d-none') && detail.innerHTML.trim()) {
+        detail.classList.add('d-none');
+        detail.innerHTML = '';
+        return;
+    }
+    document.querySelectorAll('.employee-inline-detail').forEach(node => {
+        if (node !== detail) { node.classList.add('d-none'); node.innerHTML = ''; }
+    });
+    detail.classList.remove('d-none');
+    detail.innerHTML = '<div class="result-state result-state-compact"><span class="spinner-border spinner-border-sm"></span> Loading employee details...</div>';
+    try {
+        const res = await fetch(`/api/employee/${employeeId}/intelligence?project_id=${encodeURIComponent(projectId)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Unable to load employee details.');
+        detail.innerHTML = renderProjectEmployeeDetail(data);
+    } catch (error) {
+        detail.innerHTML = `<div class="alert alert-danger mb-0">${escapeHtml(error.message)}</div>`;
+    }
+}
+
+function renderProjectEmployeeDetail(data) {
+    const emp = data.employee || {};
+    const projectGap = data.project_gap || {};
+    return `<div class="inline-detail-grid">
+        <div class="detail-section detail-section-clean">
+            <h5>${escapeHtml(emp.name || 'Employee')} <span class="text-muted">#${emp.employee_id || ''}</span></h5>
+            <div class="small text-muted">${escapeHtml(emp.email || 'No email')} | ${escapeHtml(emp.designation || '')}</div>
+            <div class="small">${escapeHtml(emp.education || 'Unknown')} | ${emp.years_of_experience || 0} yrs | ${escapeHtml(emp.department || '')}</div>
+            <div class="mt-2">${(data.skills || []).map(s=>`<span class="skill-chip">${escapeHtml(s)}</span>`).join('')}</div>
+        </div>
+        <div class="detail-section detail-section-clean">
+            <h5>Skill Gap</h5>
+            ${renderProjectGap(projectGap)}
+        </div>
+        <div class="detail-section detail-section-clean">
+            <h5>Score Breakdown</h5>
+            ${renderScoreBreakdown(data.project_match_breakdown || {})}
+        </div>
+        <div class="detail-section detail-section-clean">
+            <h5>YouTube, Coursera and Udemy Suggestions</h5>
+            <div class="learning-list">${(data.learning_recommendations || []).slice(0, 12).map(item=>`<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.source)} - ${escapeHtml(item.title)}</a>`).join('') || '<span class="text-muted">No missing project skills for this employee.</span>'}</div>
+        </div>
+    </div>`;
+}
+
+function renderScoreBreakdown(breakdown) {
+    const factors = breakdown.score_factors || [];
+    if (!factors.length) return '<p class="text-muted mb-0">Run project matching again to calculate score factors.</p>';
+    return `<p class="small text-muted">${escapeHtml(breakdown.score_explanation || '')}</p>
+        <div class="score-factor-list">
+            ${factors.map(item => `<div class="score-factor">
+                <div class="d-flex justify-content-between small">
+                    <strong>${escapeHtml(item.label)}</strong>
+                    <span>${Number(item.score || 0).toFixed(1)}% (${Number(item.contribution || 0).toFixed(1)}/${Number(item.weight || 0)})</span>
+                </div>
+                <div class="progress" style="height:6px">
+                    <div class="progress-bar" style="width:${Math.max(0, Math.min(100, Number(item.score || 0)))}%"></div>
+                </div>
+            </div>`).join('')}
+        </div>`;
+}
+
+function renderProjectGap(gap) {
+    if (!gap || !(gap.required_skills || []).length) return '<p class="text-muted mb-0">No project gap selected.</p>';
+    return `<div class="gap-block"><div class="d-flex justify-content-between"><strong>Project Skill Match</strong><span class="score-pill">${Number(gap.match_percentage || 0)}%</span></div>
+        <div class="small mt-2"><span class="text-success">Matched:</span> ${(gap.matched_skills || []).map(escapeHtml).join(', ') || 'None'}</div>
+        <div class="small"><span class="text-danger">Missing:</span> ${(gap.missing_skills || []).map(escapeHtml).join(', ') || 'Complete'}</div></div>`;
+}
+
+function renderPagination(page, pages, total) {
+    const bar = document.getElementById('pagination');
+    bar.classList.toggle('d-none', total <= 50);
+    document.getElementById('pageStatus').textContent = `Page ${page} of ${pages}`;
+    document.getElementById('previousPage').disabled = page <= 1;
+    document.getElementById('nextPage').disabled = page >= pages;
+}
+
+document.getElementById('previousPage').addEventListener('click', () => { currentPage -= 1; loadMatches(); });
+document.getElementById('nextPage').addEventListener('click', () => { currentPage += 1; loadMatches(); });
+document.addEventListener('DOMContentLoaded', loadMatches);
+</script>
+{% endblock %}

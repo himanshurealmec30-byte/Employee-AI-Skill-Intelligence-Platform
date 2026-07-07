@@ -1,0 +1,6 @@
+Name,Email,Skills,Experience,Education,Department,Job Title,Certifications
+Ananya Sharma,ananya.sharma@example.com,"Python;SQL;Machine Learning;Pandas;NLP",5,Masters,Data Science,Data Scientist,"AWS Certified Cloud Practitioner"
+Rohan Mehta,rohan.mehta@example.com,"JavaScript;React;Node.js;SQL;Docker",4,Bachelors,Engineering,Full Stack Developer,""
+Priya Nair,priya.nair@example.com,"AWS;Docker;Kubernetes;Terraform;Linux",6,B.Tech,Cloud,Cloud Engineer,"AWS Certified Solutions Architect"
+Karan Patel,karan.patel@example.com,"Python;TensorFlow;PyTorch;Spark;Machine Learning",7,M.Tech,AI,Machine Learning Engineer,"Google Cloud Professional Machine Learning Engineer"
+Sneha Rao,sneha.rao@example.com,"Excel;Power BI;SQL;Statistics;Tableau",3,MBA,Analytics,Data Analyst,""

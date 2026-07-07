@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Analytics - TalentBeacon{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <h2 class="page-title mb-0">Workforce Analytics</h2>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-success" href="{{ url_for('analytics_export_excel') }}" data-no-loading="true" download>Export Excel</a>
+        <a class="btn btn-outline-danger" href="{{ url_for('analytics_export_pdf') }}" data-no-loading="true" download>Export PDF</a>
+    </div>
+</div>
+<div class="row g-4">
+    <div class="col-md-6">
+        <div class="panel-card">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h5 class="mb-0">Department Distribution</h5>
+                <span class="badge bg-secondary">{{ analytics.total_employees or 0 }} employees</span>
+            </div>
+            <div class="chart-frame"><canvas id="deptChart"></canvas></div>
+            <div id="deptTable" class="distribution-table mt-3"></div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="panel-card">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h5 class="mb-0">Top Skills</h5>
+                <span class="badge bg-secondary">Employee count</span>
+            </div>
+            <div class="chart-frame"><canvas id="topSkillsChart"></canvas></div>
+            <div id="skillsTable" class="distribution-table mt-3"></div>
+        </div>
+    </div>
+    <div class="col-12">
+        <div class="panel-card">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h5 class="mb-0">Experience Distribution</h5>
+                <span class="badge bg-secondary">Avg {{ analytics.avg_experience or 0 }} yrs</span>
+            </div>
+            <div class="chart-frame chart-frame-short"><canvas id="experienceChart"></canvas></div>
+            <div id="experienceTable" class="distribution-table mt-3"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const analytics = {{ analytics | tojson }};
+const palette = ['#0d6efd','#20c997','#ffc107','#dc3545','#6f42c1','#fd7e14','#0dcaf0','#198754','#d63384','#6610f2','#6c757d','#17a2b8'];
+const depts = analytics.departments || {};
+new Chart(document.getElementById('deptChart'), {
+    type: 'doughnut',
+    data: { labels: Object.keys(depts), datasets: [{ data: Object.values(depts), backgroundColor: Object.keys(depts).map((_, i) => palette[i % palette.length]), borderWidth: 0 }] },
+    options: { responsive: true, maintainAspectRatio: false, events: [], plugins: { tooltip: { enabled: false } } }
+});
+const skills = analytics.top_skills || [];
+new Chart(document.getElementById('topSkillsChart'), {
+    type: 'bar',
+    data: { labels: skills.map(s=>s.skill), datasets: [{ data: skills.map(s=>s.count), backgroundColor: skills.map((_, i) => palette[(i + 2) % palette.length]), borderRadius: 5 }] },
+    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, events: [], plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { beginAtZero: true } } }
+});
+const exp = analytics.experience_bands || {};
+new Chart(document.getElementById('experienceChart'), {
+    type: 'bar',
+    data: { labels: Object.keys(exp), datasets: [{ label: 'Employees', data: Object.values(exp), backgroundColor: ['#176b87','#22a699','#f2b84b','#d85c59'], borderRadius: 5 }] },
+    options: { responsive: true, maintainAspectRatio: false, events: [], plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { y: { beginAtZero: true } } }
+});
+
+function renderDistributionTable(targetId, rows, labelTitle) {
+    const target = document.getElementById(targetId);
+    if (!rows || !rows.length) {
+        target.innerHTML = '<p class="text-muted small mb-0">No employee data available.</p>';
+        return;
+    }
+    target.innerHTML = `<div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+            <thead><tr><th>${labelTitle}</th><th class="text-end">Employees</th><th class="text-end">Percent</th></tr></thead>
+            <tbody>${rows.map(row => `<tr>
+                <td>${escapeHtml(row.name || row.skill || '')}</td>
+                <td class="text-end fw-semibold">${Number(row.count || 0).toLocaleString()}</td>
+                <td class="text-end">${Number(row.percentage || 0).toFixed(1)}%</td>
+            </tr>`).join('')}</tbody>
+        </table>
+    </div>`;
+}
+
+function escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = String(value || '');
+    return div.innerHTML;
+}
+
+renderDistributionTable('deptTable', analytics.department_rows || Object.entries(depts).map(([name, count]) => ({name, count})), 'Department');
+renderDistributionTable('skillsTable', skills.map(item => ({name: item.skill, count: item.count, percentage: item.percentage})), 'Skill');
+renderDistributionTable('experienceTable', analytics.experience_rows || Object.entries(exp).map(([name, count]) => ({name, count})), 'Experience');
+</script>
+{% endblock %}

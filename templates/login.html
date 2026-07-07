@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - TalentBeacon</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+</head>
+<body class="auth-body">
+    <main class="auth-shell">
+        <section class="auth-panel">
+            <div class="auth-brand">
+                <h1>TalentBeacon</h1>
+                <p>Employee Recommendation & Skill Intelligence</p>
+            </div>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            {% for category, message in messages %}
+            <div class="alert alert-{{ category }} auth-alert">{{ message }}</div>
+            {% endfor %}
+            {% endif %}
+            {% endwith %}
+
+            <form method="POST" action="{{ url_for('login') }}" id="signinForm" class="auth-form">
+                <h2>Sign in</h2>
+                <input type="text" name="username" class="form-control auth-input" required placeholder="Username or email">
+                <div class="input-group mb-3">
+                    <input id="loginPassword" type="password" name="password" class="form-control auth-input mb-0" required placeholder="Password">
+                    <button class="btn btn-outline-secondary" type="button" data-toggle-password="loginPassword">Show</button>
+                </div>
+                <button type="submit" class="btn auth-primary w-100">Log in</button>
+                <a class="btn auth-link w-100" href="{{ url_for('forgot_password_page') }}">Forgot password?</a>
+            </form>
+
+            <div class="auth-demo">Accounts are created by Admin/HR only. Demo: admin/admin123 | hr/hr123 | manager/manager123 | employee/employee123</div>
+        </section>
+    </main>
+    <script>
+        document.querySelectorAll("[data-toggle-password]").forEach((button) => {
+            button.addEventListener("click", () => {
+                const input = document.getElementById(button.dataset.togglePassword);
+                const show = input.type === "password";
+                input.type = show ? "text" : "password";
+                button.textContent = show ? "Hide" : "Show";
+            });
+        });
+    </script>
+</body>
+</html>

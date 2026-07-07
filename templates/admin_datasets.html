@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Employee Upload - TalentBeacon{% endblock %}
+{% block content %}
+<h2 class="page-title">Admin Employee File Upload</h2>
+<div class="alert alert-primary">
+    <strong>Easy steps:</strong> 1. Upload CSV/Excel  2. Activate the file  3. Go to Projects  4. Create project  5. Click Match.
+</div>
+<div class="row g-4">
+    <div class="col-md-5">
+        <div class="panel-card">
+            <h5>Upload Employee File</h5>
+            <form method="post" enctype="multipart/form-data" id="datasetUploadForm" data-no-loading="true">
+                <input type="file" name="dataset" class="form-control mb-3" accept=".csv,.xlsx,.xls" required>
+                <button class="btn btn-primary w-100" type="submit" id="uploadButton">
+                    <i class="bi bi-upload"></i> Upload Employee File
+                </button>
+            </form>
+            <div class="progress mt-3 d-none" id="uploadProgress" role="progressbar">
+                <div class="progress-bar progress-bar-striped progress-bar-animated" id="uploadProgressBar" style="width: 0%">0%</div>
+            </div>
+            <div class="small text-muted mt-2 d-none" id="uploadStatus">Preparing upload...</div>
+            <hr>
+            <p class="text-muted mb-2">Accepted formats: CSV, XLSX, XLS.</p>
+            <p class="text-muted mb-0">Recommended columns: Name, Email, Skills, Experience, Education, Department, Job Title, Certifications.</p>
+            {% if upload_summary.active_dataset %}
+            <div class="alert alert-info mt-3 mb-0">Active dataset: <strong>{{ upload_summary.active_dataset }}</strong></div>
+            {% endif %}
+        </div>
+    </div>
+    <div class="col-md-7">
+        <div class="panel-card">
+            <h5>Upload Summary</h5>
+            <div class="row g-3 mb-3">
+                <div class="col">
+                    <div class="kpi-label">Uploaded Employees</div>
+                    <div class="fs-3 fw-bold">{{ upload_summary.active_row_count or 0 }}</div>
+                </div>
+                <div class="col">
+                    <div class="kpi-label">Employee Files</div>
+                    <div class="fs-3 fw-bold">{{ upload_summary.uploaded_datasets or 0 }}</div>
+                </div>
+            </div>
+            {% if recent_datasets %}
+            <table class="table table-hover align-middle">
+                <thead><tr><th>Filename</th><th>Type</th><th>Rows</th><th>Status</th><th>Uploaded</th><th>Actions</th></tr></thead>
+                <tbody>
+                {% for item in recent_datasets %}
+                <tr>
+                    <td>{{ item.filename }}</td>
+                    <td>{{ item.file_type }}</td>
+                    <td>{{ item.row_count }}</td>
+                    <td>
+                        {% if item.is_active %}
+                        <span class="badge bg-success">Active</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Stored</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ item.uploaded_at }}</td>
+                    <td>
+                        <div class="d-flex flex-wrap gap-1">
+                            {% if not item.is_active %}
+                            <form method="post" action="{{ url_for('activate_dataset_page', upload_id=item.id) }}">
+                                <button class="btn btn-sm btn-outline-primary" type="submit">Activate</button>
+                            </form>
+                            {% endif %}
+                            <form method="post" action="{{ url_for('delete_dataset_page', upload_id=item.id) }}" onsubmit="return confirm('Delete this uploaded file and its employee records?')">
+                                <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-muted">No employee file uploads found.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const uploadForm = document.getElementById('datasetUploadForm');
+if (uploadForm) {
+    uploadForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const fileInput = uploadForm.querySelector('input[type="file"]');
+        if (!fileInput.files.length) return;
+        const progress = document.getElementById('uploadProgress');
+        const progressBar = document.getElementById('uploadProgressBar');
+        const status = document.getElementById('uploadStatus');
+        progress.classList.remove('d-none');
+        status.classList.remove('d-none');
+        status.classList.remove('upload-empty-status');
+        status.classList.remove('upload-duplicate-status');
+        status.textContent = 'Uploading file...';
+        progressBar.style.width = '0%';
+        progressBar.textContent = '0%';
+        const button = document.getElementById('uploadButton');
+        const resetUploadButton = () => {
+            button.disabled = false;
+            button.innerHTML = '<i class="bi bi-upload"></i> Upload Employee File';
+            if (window.TalentBeaconLoading) window.TalentBeaconLoading.hide();
+        };
+        button.disabled = true;
+        button.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Uploading...';
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', uploadForm.action || window.location.href);
+        xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+        xhr.upload.addEventListener('progress', (event) => {
+            if (!event.lengthComputable) return;
+            const percent = Math.round((event.loaded / event.total) * 100);
+            progressBar.style.width = `${percent}%`;
+            progressBar.textContent = `${percent}%`;
+            if (percent >= 100) {
+                status.textContent = 'Upload complete. Processing employees...';
+                button.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Processing...';
+            }
+        });
+        xhr.onload = () => {
+            let payload = {};
+            try { payload = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
+            if (xhr.status >= 200 && xhr.status < 300 && payload.ok) {
+                status.textContent = payload.message || 'Upload complete.';
+                progressBar.style.width = '100%';
+                progressBar.textContent = '100%';
+                window.location.href = payload.redirect || window.location.href;
+                return;
+            }
+            const message = payload.message || 'Upload failed. Please check the file and try again.';
+            if (message.toLowerCase().includes('duplicate file detected')) {
+                status.innerHTML = '<div>Duplicate file detected</div><div class="small fw-normal mt-2">' + message.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+                status.classList.add('upload-duplicate-status');
+            } else {
+                status.textContent = message;
+            }
+            if (message === 'The uploaded file is empty') {
+                status.classList.add('upload-empty-status');
+            }
+            resetUploadButton();
+        };
+        xhr.onerror = () => {
+            status.textContent = 'Upload failed because the connection was interrupted.';
+            resetUploadButton();
+        };
+        xhr.ontimeout = () => {
+            status.textContent = 'Upload timed out. Please try again.';
+            resetUploadButton();
+        };
+        xhr.onloadend = () => {
+            if (window.TalentBeaconLoading) window.TalentBeaconLoading.hide();
+        };
+        xhr.timeout = 120000;
+        xhr.send(new FormData(uploadForm));
+    });
+}
+</script>
+{% endblock %}
