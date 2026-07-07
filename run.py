@@ -373,6 +373,7 @@ def create_app():
     @login_required
     @role_required("admin", "hr")
     def admin_datasets_page():
+        owner_id = _current_data_owner_id()
         if request.method == "POST":
             is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
             upload = request.files.get("dataset")
@@ -384,10 +385,10 @@ def create_app():
             safe_name = secure_filename(upload.filename)
             upload.filename = safe_name
             try:
-                result = process_dataset_upload(upload, uploaded_by=session["user"]["id"])
-                account_result = _create_accounts_from_active_dataset(actor_id=_current_user_id())
+                result = process_dataset_upload(upload, uploaded_by=owner_id)
+                account_result = _create_accounts_from_active_dataset(actor_id=owner_id)
                 if account_result["accounts"]:
-                    _store_generated_credentials(_current_user_id(), account_result["accounts"])
+                    _store_generated_credentials(owner_id, account_result["accounts"])
                 _refresh_talent_service(app)
                 account_message = f" Created {account_result['created']} employee login accounts. Open Users to view temporary passwords."
                 if is_ajax:
@@ -415,25 +416,26 @@ def create_app():
     @login_required
     @role_required("admin", "hr")
     def admin_users_page():
+        owner_id = _current_data_owner_id()
         created_user = None
-        generated_accounts = _consume_generated_credentials(_current_user_id())
+        generated_accounts = _consume_generated_credentials(owner_id)
         if request.method == "POST":
             name = request.form.get("name", "").strip()
             role = request.form.get("role", "employee").strip().lower()
             try:
-                created_user = _create_user_account(name, role=role, actor_id=_current_user_id())
+                created_user = _create_user_account(name, role=role, actor_id=owner_id)
                 flash(f"Created {created_user['role'].upper()} account for {created_user['username']}.", "success")
             except Exception as exc:
                 flash(str(exc), "danger")
         elif not generated_accounts:
             try:
-                result = _create_accounts_from_active_dataset(actor_id=_current_user_id(), reset_existing_passwords=True)
+                result = _create_accounts_from_active_dataset(actor_id=owner_id, reset_existing_passwords=False)
                 generated_accounts = result["accounts"]
-                if result["created"] or result.get("reset"):
-                    flash(f"Prepared {result['created']} new and {result.get('reset', 0)} pending employee login accounts from the active uploaded file.", "success")
+                if result["created"]:
+                    flash(f"Prepared {result['created']} new employee login accounts from the active uploaded file.", "success")
             except Exception:
                 generated_accounts = []
-        managed_users = _managed_users_for_actor(_current_user_id())
+        managed_users = _managed_users_for_actor(owner_id)
         _sync_user_accounts_to_mysql(managed_users)
         return render_template(
             "admin_users.html",
@@ -453,11 +455,12 @@ def create_app():
     @login_required
     @role_required("admin", "hr")
     def admin_users_from_dataset_page():
+        owner_id = _current_data_owner_id()
         try:
-            result = _create_accounts_from_active_dataset(actor_id=_current_user_id(), reset_existing_passwords=True)
+            result = _create_accounts_from_active_dataset(actor_id=owner_id, reset_existing_passwords=True)
             flash(f"Prepared {result['created']} new and {result.get('reset', 0)} pending employee login credentials from active file. {result['skipped']} completed accounts were kept.", "success")
             if result["accounts"]:
-                _store_generated_credentials(_current_user_id(), result["accounts"])
+                _store_generated_credentials(owner_id, result["accounts"])
         except Exception as exc:
             flash(str(exc), "danger")
         return redirect(url_for("admin_users_page"))
@@ -478,7 +481,7 @@ def create_app():
     @role_required("admin", "hr")
     def activate_dataset_page(upload_id):
         try:
-            upload = activate_dataset(upload_id, user_id=_current_user_id())
+            upload = activate_dataset(upload_id, user_id=_current_data_owner_id())
             _refresh_talent_service(app)
             flash(f"{upload['filename']} is now the active dataset.", "success")
         except Exception as exc:
@@ -490,7 +493,7 @@ def create_app():
     @role_required("admin", "hr")
     def delete_dataset_page(upload_id):
         try:
-            upload = delete_dataset(upload_id, user_id=_current_user_id())
+            upload = delete_dataset(upload_id, user_id=_current_data_owner_id())
             _refresh_talent_service(app)
             flash(f"Deleted {upload['filename']} from uploads and database metadata.", "info")
         except Exception as exc:
@@ -895,7 +898,7 @@ def create_app():
 
 def _safe_upload_dashboard():
     try:
-        return dashboard_upload_summary(user_id=_current_user_id())
+        return dashboard_upload_summary(user_id=_current_data_owner_id())
     except Exception:
         return {}, [], []
 
@@ -909,7 +912,7 @@ def _safe_projects():
 
 def _safe_dataset_uploads():
     try:
-        return list_dataset_uploads(user_id=_current_user_id())
+        return list_dataset_uploads(user_id=_current_data_owner_id())
     except Exception:
         return []
 
@@ -923,7 +926,7 @@ def _active_dataset_id_for_actor(actor_id):
 
 
 def _refresh_talent_service(app):
-    user_id = _current_user_id()
+    user_id = _current_data_owner_id()
     user_key = str(user_id)
     services = app.config.setdefault("services_by_user", {})
     try:
@@ -941,24 +944,45 @@ def _current_user_id():
 def _current_data_owner_id():
     if "user" not in session:
         return None
-    if session["user"].get("role") == "employee":
+    role = session["user"].get("role")
+    if role in {"employee", "hr"}:
         registered_user = _get_registered_user_by_id(session["user"].get("id"))
+        if registered_user and registered_user.get("created_by"):
+            return registered_user.get("created_by")
+        if role == "hr":
+            return 1
         return (registered_user or {}).get("created_by") or session["user"].get("id")
     return session["user"].get("id")
 
 
 def _current_employee_dataset_id():
     user = session.get("user", {}) if "user" in session else {}
-    source_code = str(user.get("source_employee_code") or "").strip()
-    if source_code.isdigit():
-        return int(source_code)
+    registered_user = _get_registered_user_by_id(user.get("id"))
+    for value in (
+        user.get("source_employee_code"),
+        (registered_user or {}).get("source_employee_code"),
+        user.get("source_employee_key"),
+        (registered_user or {}).get("source_employee_key"),
+    ):
+        row_id = _dataset_row_id_from_source(value)
+        if row_id is not None:
+            return row_id
     employee_id = str(user.get("employee_id") or "").strip()
     if employee_id.isdigit():
         return int(employee_id)
-    registered_user = _get_registered_user_by_id(user.get("id"))
-    source_code = str((registered_user or {}).get("source_employee_code") or "").strip()
-    if source_code.isdigit():
-        return int(source_code)
+    return None
+
+
+def _dataset_row_id_from_source(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    for pattern in (r":row:(\d+)$", r":(\d+)$"):
+        match = re.search(pattern, text)
+        if match:
+            return int(match.group(1))
     return None
 
 
@@ -1160,6 +1184,11 @@ def _load_registered_users():
                 if "locked_until" not in user:
                     user["locked_until"] = None
                     changed = True
+                if user.get("created_from_upload") and "source_employee_key" not in user:
+                    key = _user_employee_identity_key(user)
+                    if key:
+                        user["source_employee_key"] = key
+                        changed = True
                 expected_created = not bool(user.get("first_login"))
                 if user.get("account_created") != expected_created:
                     user["account_created"] = expected_created
@@ -1301,26 +1330,48 @@ def _managed_users_for_actor(actor_id):
     active_dataset_id = _active_dataset_id_for_actor(actor_id)
     if not active_dataset_id:
         return []
+    active_file_hash = _active_dataset_hash_for_actor(actor_id)
     users = _load_registered_users()
     owned_users = [
         user for user in users
         if str(user.get("created_by")) == str(actor_id) and user.get("created_from_upload")
-        and str(user.get("source_dataset_id") or "") == str(active_dataset_id)
     ]
     try:
         df = load_active_employee_df(user_id=actor_id)
         if df.empty:
             return []
-        active_codes = {
-            str(row.get("Employee_Code") or row.get("Display_Employee_ID") or "").strip()
-            for _, row in df.iterrows()
-        }
-        active_codes.discard("")
-        active_upload_users = [
-            user for user in owned_users
-            if str(user.get("source_employee_code") or "").strip() in active_codes
-        ]
-        return active_upload_users
+        active_keys = []
+        for _, row in df.iterrows():
+            key = _employee_identity_key(row.to_dict(), active_file_hash)
+            if key:
+                active_keys.append(key)
+        users_by_key = {}
+        for user in owned_users:
+            key = _user_employee_identity_key(user)
+            if not key:
+                continue
+            current = users_by_key.get(key)
+            if current is None:
+                users_by_key[key] = user
+                continue
+            current_ready = not bool(current.get("first_login"))
+            user_ready = not bool(user.get("first_login"))
+            if user_ready and not current_ready:
+                users_by_key[key] = user
+            elif user_ready == current_ready and str(user.get("created_at") or "") < str(current.get("created_at") or ""):
+                users_by_key[key] = user
+        selected = []
+        selected_ids = set()
+        for key in active_keys:
+            user = users_by_key.get(key)
+            if not user:
+                continue
+            user_id = str(user.get("id") or "")
+            if user_id in selected_ids:
+                continue
+            selected_ids.add(user_id)
+            selected.append(user)
+        return selected
     except Exception:
         return []
 
@@ -1416,8 +1467,65 @@ def _valid_employee_name(value):
     return value
 
 
+def _stable_source_code(value):
+    code = str(value or "").strip()
+    if ":" in code:
+        code = code.rsplit(":", 1)[-1].strip()
+    return code
+
+
+def _name_identity_key(value):
+    name = _valid_employee_name(value)
+    if not name:
+        return ""
+    normalized = re.sub(r"[^a-z0-9]+", ".", name.lower()).strip(".")
+    return f"name:{normalized}" if normalized else ""
+
+
+def _active_dataset_hash_for_actor(actor_id):
+    try:
+        active = get_active_dataset(actor_id)
+        return str(active.get("file_hash") or "").strip() if active else ""
+    except Exception:
+        return ""
+
+
+def _employee_identity_key(row, file_hash=""):
+    email = str(row.get("Email") or "").strip().lower()
+    if email and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return f"email:{email}"
+    name_key = _name_identity_key(row.get("Name"))
+    if name_key:
+        return name_key
+    display_id = str(row.get("Display_Employee_ID") or "").strip()
+    if display_id:
+        return f"file:{file_hash}:row:{display_id}" if file_hash else ""
+    code = _stable_source_code(row.get("Employee_Code"))
+    if code:
+        return f"file:{file_hash}:row:{code}" if file_hash else ""
+    return ""
+
+
+def _user_employee_identity_key(user):
+    key = str(user.get("source_employee_key") or "").strip()
+    if key and not key.startswith("row:"):
+        return key
+    email = str(user.get("source_email") or "").strip().lower()
+    if email and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return f"email:{email}"
+    name_key = _name_identity_key(user.get("username") if user.get("name_from_file") else "")
+    if name_key:
+        return name_key
+    file_hash = str(user.get("source_file_hash") or "").strip()
+    code = _stable_source_code(user.get("source_employee_code"))
+    if file_hash and code:
+        return f"file:{file_hash}:row:{code}"
+    return ""
+
+
 def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords=False):
     active_dataset_id = _active_dataset_id_for_actor(actor_id)
+    active_file_hash = _active_dataset_hash_for_actor(actor_id)
     df = load_active_employee_df(user_id=actor_id)
     if df.empty:
         raise ValueError("Upload and activate an employee file first.")
@@ -1431,24 +1539,29 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
         for user in users
         if user.get("company_email")
     }
-    users_by_email = {
-        email: user
-        for user in users
+    def prefer_existing_account(current, candidate):
+        if current is None:
+            return candidate
+        current_ready = not bool(current.get("first_login"))
+        candidate_ready = not bool(candidate.get("first_login"))
+        if candidate_ready != current_ready:
+            return candidate if candidate_ready else current
+        return current
+
+    users_by_email = {}
+    users_by_source_key = {}
+    for user in users:
+        if str(user.get("created_by")) != str(actor_id) or not user.get("created_from_upload"):
+            continue
         for email in {
             str(user.get("email") or "").strip().lower(),
             str(user.get("company_email") or "").strip().lower(),
-        }
-        if email
-        and str(user.get("created_by")) == str(actor_id)
-        and str(user.get("source_dataset_id") or "") == str(active_dataset_id)
-    }
-    users_by_source_code = {
-        str(user.get("source_employee_code") or "").strip(): user
-        for user in users
-        if user.get("source_employee_code")
-        and str(user.get("created_by")) == str(actor_id)
-        and str(user.get("source_dataset_id") or "") == str(active_dataset_id)
-    }
+        }:
+            if email:
+                users_by_email[email] = prefer_existing_account(users_by_email.get(email), user)
+        key = _user_employee_identity_key(user)
+        if key:
+            users_by_source_key[key] = prefer_existing_account(users_by_source_key.get(key), user)
     next_user_id = _next_registered_user_id(users)
     next_employee_number = _employee_number_start(users)
     created_accounts = []
@@ -1463,33 +1576,40 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
         has_file_name = bool(file_name)
         source_email = str(row.get("Email") or "").strip().lower()
         source_employee_code = str(row.get("Employee_Code") or row.get("Display_Employee_ID") or "").strip()
+        source_employee_key = _employee_identity_key(row, active_file_hash)
         if not name:
             skipped += 1
             continue
 
         existing_user = None
-        if source_employee_code:
-            existing_user = users_by_source_code.get(source_employee_code)
-        if existing_user is None and source_email:
+        if source_email:
             existing_user = users_by_email.get(source_email)
+        if existing_user is None and source_employee_key:
+            existing_user = users_by_source_key.get(source_employee_key)
 
         if existing_user is not None:
             if existing_user.get("created_from_upload"):
+                if existing_user.get("source_dataset_id") != active_dataset_id:
+                    existing_user["source_dataset_id"] = active_dataset_id
+                    changed = True
+                if existing_user.get("source_employee_code") != source_employee_code:
+                    existing_user["source_employee_code"] = source_employee_code
+                    changed = True
+                if source_employee_key and existing_user.get("source_employee_key") != source_employee_key:
+                    existing_user["source_employee_key"] = source_employee_key
+                    changed = True
+                if source_email and existing_user.get("source_email") != source_email:
+                    existing_user["source_email"] = source_email
+                    changed = True
+                if active_file_hash and existing_user.get("source_file_hash") != active_file_hash:
+                    existing_user["source_file_hash"] = active_file_hash
+                    changed = True
                 if existing_user.get("username") != name:
                     existing_user["username"] = name
                     changed = True
                 if bool(existing_user.get("name_from_file")) != has_file_name:
                     existing_user["name_from_file"] = has_file_name
                     changed = True
-                if source_email and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", source_email):
-                    current_email = str(existing_user.get("company_email") or existing_user.get("email") or "").lower()
-                    if current_email.startswith("employee.") and source_email not in used_emails:
-                        used_emails.discard(current_email)
-                        existing_user["email"] = source_email
-                        existing_user["company_email"] = source_email
-                        used_emails.add(source_email)
-                        users_by_email[source_email] = existing_user
-                        changed = True
             if (
                 reset_existing_passwords
                 and existing_user.get("created_from_upload")
@@ -1521,6 +1641,9 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
             "employee_id": employee_id,
             "source_dataset_id": active_dataset_id,
             "source_employee_code": source_employee_code,
+            "source_employee_key": source_employee_key,
+            "source_file_hash": active_file_hash,
+            "source_email": source_email,
             "username": name,
             "name_from_file": has_file_name,
             "email": company_email,
@@ -1542,8 +1665,8 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
         users.append(user)
         used_emails.add(company_email)
         users_by_email[company_email] = user
-        if source_employee_code:
-            users_by_source_code[source_employee_code] = user
+        if source_employee_key:
+            users_by_source_key[source_employee_key] = user
         created_accounts.append(_display_generated_account(user, temporary_password))
         changed = True
 

@@ -1,9 +1,10 @@
 import unittest
 from unittest.mock import patch
 
+import pandas as pd
 from werkzeug.security import generate_password_hash
 
-from run import create_app, _authenticate_user
+from run import create_app, _authenticate_user, _create_accounts_from_active_dataset
 
 
 class EmployeePrivacyTests(unittest.TestCase):
@@ -32,6 +33,31 @@ class EmployeePrivacyTests(unittest.TestCase):
         response = self.client.get("/api/career/2")
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json()["error"], "Unauthorized")
+
+    def test_employee_profile_uses_dataset_row_from_generated_account(self):
+        generated_user = {
+            "id": 999002,
+            "username": "Employee 7",
+            "role": "employee",
+            "employee_id": "TB30999",
+            "source_employee_code": "dataset-abc:7",
+            "source_employee_key": "file:file-hash:row:7",
+            "created_by": 1,
+            "first_login": False,
+        }
+        with self.client.session_transaction() as session:
+            session["user"] = {
+                "id": generated_user["id"],
+                "username": generated_user["username"],
+                "role": generated_user["role"],
+                "employee_id": generated_user["employee_id"],
+                "source_employee_code": generated_user["source_employee_code"],
+            }
+        with patch("run._get_registered_user", return_value=generated_user), \
+             patch("run._get_registered_user_by_id", return_value=generated_user):
+            response = self.client.get("/career")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"const id = 7;", response.data)
 
     def test_employee_nav_hides_dashboard_and_career_links(self):
         self._login_employee()
@@ -144,6 +170,88 @@ class EmployeePrivacyTests(unittest.TestCase):
             user, error = _authenticate_user("admin", "admin123")
             self.assertIsNone(user)
             self.assertEqual(error, "Incorrect password.")
+
+    def test_reuploaded_employee_file_reuses_completed_account(self):
+        users = [{
+            "id": 5001,
+            "employee_id": "TB1001",
+            "username": "Employee 1",
+            "email": "employee.1.tb1001@talentbeacon.local",
+            "company_email": "employee.1.tb1001@talentbeacon.local",
+            "password_hash": generate_password_hash("OldPass123!"),
+            "role": "employee",
+            "first_login": False,
+            "created_by": 10,
+            "created_from_upload": True,
+            "source_dataset_id": "old-dataset",
+            "source_employee_code": "old-dataset:1",
+            "source_employee_key": "file:same-file-hash:row:1",
+            "source_file_hash": "same-file-hash",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }]
+        df = pd.DataFrame([{
+            "Employee_ID": 999,
+            "Display_Employee_ID": 1,
+            "Employee_Code": "new-dataset:1",
+            "Name": "Employee 1",
+            "Email": "",
+        }])
+        with patch("run._active_dataset_id_for_actor", return_value="new-dataset"), \
+             patch("run._active_dataset_hash_for_actor", return_value="same-file-hash"), \
+             patch("run.load_active_employee_df", return_value=df), \
+             patch("run._load_registered_users", return_value=users), \
+             patch("run._save_registered_users"), \
+             patch("run._sync_user_accounts_to_mysql"), \
+             patch("run._audit"):
+            result = _create_accounts_from_active_dataset(actor_id=10, reset_existing_passwords=True)
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["reset"], 0)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(users[0]["source_dataset_id"], "new-dataset")
+        self.assertEqual(users[0]["source_employee_code"], "new-dataset:1")
+        self.assertEqual(users[0]["company_email"], "employee.1.tb1001@talentbeacon.local")
+        self.assertFalse(users[0]["first_login"])
+
+    def test_different_employee_file_does_not_reuse_same_row_account(self):
+        users = [{
+            "id": 5001,
+            "employee_id": "TB1001",
+            "username": "Employee 1",
+            "email": "employee.1.tb1001@talentbeacon.local",
+            "company_email": "employee.1.tb1001@talentbeacon.local",
+            "password_hash": generate_password_hash("OldPass123!"),
+            "role": "employee",
+            "first_login": False,
+            "created_by": 10,
+            "created_from_upload": True,
+            "source_dataset_id": "old-dataset",
+            "source_employee_code": "old-dataset:1",
+            "source_employee_key": "file:first-file-hash:row:1",
+            "source_file_hash": "first-file-hash",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }]
+        df = pd.DataFrame([{
+            "Employee_ID": 999,
+            "Display_Employee_ID": 1,
+            "Employee_Code": "new-dataset:1",
+            "Name": "Employee 1",
+            "Email": "",
+        }])
+        with patch("run._active_dataset_id_for_actor", return_value="new-dataset"), \
+             patch("run._active_dataset_hash_for_actor", return_value="second-file-hash"), \
+             patch("run.load_active_employee_df", return_value=df), \
+             patch("run._load_registered_users", return_value=users), \
+             patch("run._save_registered_users"), \
+             patch("run._sync_user_accounts_to_mysql"), \
+             patch("run._audit"):
+            result = _create_accounts_from_active_dataset(actor_id=10, reset_existing_passwords=True)
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(result["reset"], 0)
+        self.assertEqual(result["skipped"], 0)
+        self.assertEqual(len(users), 2)
+        self.assertEqual(users[0]["source_dataset_id"], "old-dataset")
+        self.assertEqual(users[1]["source_dataset_id"], "new-dataset")
+        self.assertTrue(users[1]["first_login"])
 
 
 if __name__ == "__main__":
