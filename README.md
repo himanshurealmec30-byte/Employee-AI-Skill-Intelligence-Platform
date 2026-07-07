@@ -40,7 +40,7 @@ python train_models.py
 ```bash
 python run.py
 ```
-Open **http://localhost:5000**
+Open **http://localhost:5001**
 
 ### 6. (Optional) Run Streamlit dashboard
 ```bash
