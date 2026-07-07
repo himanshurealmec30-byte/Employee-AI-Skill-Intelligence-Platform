@@ -12,7 +12,8 @@
       "is_active": false,
       "uploaded_by": 1,
       "uploaded_at": "2026-07-07 16:19:15",
-      "mysql_upload_id": 5
+      "mysql_upload_id": 5,
+      "mysql_sync_error": "Uploaded file not found."
     },
     {
       "id": "992b97c84a754e6698c71cbbeedc271a",
@@ -25,7 +26,8 @@
       "is_active": true,
       "uploaded_by": 1,
       "uploaded_at": "2026-07-07 16:17:43",
-      "mysql_upload_id": 4
+      "mysql_upload_id": 4,
+      "mysql_sync_error": "Uploaded file not found."
     },
     {
       "id": "5a7a8002e9994016bba9b2319404a36d",

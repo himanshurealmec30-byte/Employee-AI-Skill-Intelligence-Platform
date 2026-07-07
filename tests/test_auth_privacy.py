@@ -103,6 +103,59 @@ class EmployeePrivacyTests(unittest.TestCase):
         with self.client.session_transaction() as session:
             self.assertNotIn("user", session)
 
+    def test_active_duplicate_employee_name_does_not_redirect_to_first_login(self):
+        pending_same_name = {
+            "id": 777010,
+            "username": "Employee 1",
+            "role": "employee",
+            "employee_id": "TB1001",
+            "source_employee_code": "old-dataset:1",
+            "first_login": True,
+        }
+        active_user = {
+            "id": 777011,
+            "username": "Employee 1",
+            "role": "employee",
+            "employee_id": "TB2001",
+            "source_employee_code": "active-dataset:1",
+            "first_login": False,
+        }
+        with self.client.session_transaction() as session:
+            session["user"] = {
+                "id": active_user["id"],
+                "username": active_user["username"],
+                "role": active_user["role"],
+                "employee_id": active_user["employee_id"],
+                "source_employee_code": active_user["source_employee_code"],
+            }
+        with patch("run._get_registered_user_by_id", return_value=active_user), \
+             patch("run._get_registered_user", return_value=pending_same_name):
+            response = self.client.get("/career")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"const id = 1;", response.data)
+
+    def test_active_account_visiting_first_login_redirects_to_dashboard(self):
+        active_user = {
+            "id": 777012,
+            "username": "active user",
+            "role": "admin",
+            "employee_id": None,
+            "first_login": False,
+        }
+        with self.client.session_transaction() as session:
+            session["user"] = {
+                "id": active_user["id"],
+                "username": active_user["username"],
+                "role": active_user["role"],
+                "employee_id": None,
+            }
+            session["first_login_user_id"] = active_user["id"]
+        with patch("run._get_registered_user_by_id", return_value=active_user), \
+             patch("run._get_registered_user", return_value=active_user):
+            response = self.client.get("/first-login")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/dashboard")
+
     def test_admin_can_request_password_reset_by_username(self):
         admin = {
             "id": 1,

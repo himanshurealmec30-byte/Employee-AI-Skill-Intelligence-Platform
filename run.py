@@ -49,7 +49,7 @@ def create_app():
         if "user" not in session:
             app.config["service"] = None
             return
-        registered_user = _get_registered_user(session["user"].get("username"))
+        registered_user = _get_registered_user_by_id(session["user"].get("id")) or _get_registered_user(session["user"].get("username"))
         if registered_user:
             session["user"].update({
                 "id": registered_user["id"],
@@ -146,6 +146,11 @@ def create_app():
         if not user:
             flash("First-login session expired. Please sign in again.", "warning")
             return redirect(url_for("login"))
+        if not user.get("first_login"):
+            session.pop("first_login_user_id", None)
+            session.pop("first_login_demo_otp", None)
+            flash("Your account is already active.", "info")
+            return redirect(url_for("dashboard"))
         if request.method == "POST":
             otp = request.form.get("otp", "").strip()
             password = request.form.get("password", "")
@@ -1268,14 +1273,25 @@ def _consume_generated_credentials(actor_id):
 
 def _get_registered_user(identity):
     identity = str(identity or "").strip().lower()
+    matches = []
     for user in _load_registered_users():
         if (
             user.get("username", "").lower() == identity
             or user.get("email", "").lower() == identity
             or user.get("company_email", "").lower() == identity
+            or str(user.get("employee_id") or "").lower() == identity
         ):
-            return user
-    return None
+            matches.append(user)
+    if not matches:
+        return None
+    matches.sort(
+        key=lambda user: (
+            bool(user.get("first_login")),
+            0 if str(user.get("employee_id") or "").lower() == identity else 1,
+            str(user.get("created_at") or ""),
+        )
+    )
+    return matches[0]
 
 
 def _demo_user_definitions():
