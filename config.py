@@ -7,8 +7,8 @@ BASE_DIR = Path(__file__).resolve().parent
 MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 MYSQL_PORT = int(os.getenv("MYSQL_PORT", 3306))
 MYSQL_USER = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "9552087105")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "talentbeacon")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "-------")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "-----")
 MYSQL_READS_ENABLED = os.getenv("MYSQL_READS_ENABLED", "1").lower() not in {"0", "false", "no"}
 
 SQLALCHEMY_DATABASE_URI = (
