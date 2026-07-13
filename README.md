@@ -24,7 +24,7 @@ pip install -r requirements.txt
 ```
 
 ### 2. Configure MySQL
-Edit `config.py` if needed (default: `root` / `9552087105`, database: `talentbeacon`).
+Edit `config.py` if needed (default: `root` / `password`, database: `database`).
 
 ### 3. Initialize database & seed 4,998 employees
 ```bash
