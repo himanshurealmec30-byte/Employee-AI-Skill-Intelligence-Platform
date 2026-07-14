@@ -431,7 +431,7 @@ def create_app():
 
     @app.route("/nlp-analysis")
     @login_required
-    @role_required("admin", "manager")
+    @role_required("admin", "hr", "manager")
     def nlp_page():
         return redirect(url_for("search_page"))
 
@@ -508,6 +508,16 @@ def create_app():
             except Exception as exc:
                 flash(str(exc), "danger")
         all_managed_users = _managed_users_for_actor(owner_id)
+        if not all_managed_users and _active_dataset_id_for_actor(owner_id):
+            try:
+                account_result = _create_accounts_from_active_dataset(actor_id=owner_id)
+                if account_result["accounts"]:
+                    _store_generated_credentials(owner_id, account_result["accounts"])
+                    generated_accounts.extend(account_result["accounts"])
+                    flash(f"Prepared {account_result['created']} employee login credentials from the active uploaded file.", "success")
+                    all_managed_users = _managed_users_for_actor(owner_id)
+            except Exception as exc:
+                flash(str(exc), "danger")
         total_managed_users = len(all_managed_users)
         start = (page - 1) * per_page
         managed_users = all_managed_users[start:start + per_page]
@@ -542,8 +552,12 @@ def create_app():
         try:
             page = max(_safe_int(request.args.get("page") or 1, 1), 1)
             per_page = min(max(_safe_int(request.args.get("per_page") or 100, 100), 25), 500)
-            result = _reset_visible_pending_accounts(owner_id, page=page, per_page=per_page)
-            flash(f"Prepared {result.get('reset', 0)} fresh pending employee login credentials for this page. {result['skipped']} completed accounts were kept.", "success")
+            result = _create_accounts_from_active_dataset(actor_id=owner_id)
+            if not result["accounts"]:
+                result = _reset_visible_pending_accounts(owner_id, page=page, per_page=per_page)
+                flash(f"Prepared {result.get('reset', 0)} fresh pending employee login credentials for this page. {result['skipped']} completed accounts were kept.", "success")
+            else:
+                flash(f"Prepared {result.get('created', 0)} new and {result.get('reset', 0)} reset employee login credentials from the active uploaded file.", "success")
             if result["accounts"]:
                 _store_generated_credentials(owner_id, result["accounts"])
         except Exception as exc:
@@ -741,7 +755,7 @@ def create_app():
     @login_required
     @role_required("admin", "hr", "manager")
     def search_page():
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
         depts = list(svc.df["Department"].unique()) if svc else []
         roles = svc.get_analytics()["roles_available"] if svc else []
         return render_template(
@@ -776,9 +790,11 @@ def create_app():
 
     @app.route("/api/nlp/parse", methods=["POST"])
     @login_required
-    @role_required("admin", "manager")
+    @role_required("admin", "hr", "manager")
     def api_nlp_parse():
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
+        if not svc:
+            return jsonify({"error": "Upload and activate an employee file first."}), 400
         text = (request.get_json() or {}).get("text", "")
         parsed = svc.parse_requirements_nlp(text)
         matches = []
@@ -823,7 +839,9 @@ def create_app():
     @login_required
     @role_required("admin", "hr", "manager")
     def api_search():
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
+        if not svc:
+            return jsonify({"error": "Upload and activate an employee file first."}), 400
         skill = request.args.get("skill")
         dept = request.args.get("department")
         min_perf = request.args.get("min_performance", 0, type=int)
@@ -1020,6 +1038,15 @@ def _refresh_talent_service(app):
     except Exception:
         services.pop(user_key, None)
         app.config.pop("service", None)
+
+
+def _get_talent_service(app):
+    svc = app.config.get("service")
+    df = getattr(svc, "df", None)
+    if svc is None or getattr(df, "empty", True):
+        _refresh_talent_service(app)
+        svc = app.config.get("service")
+    return svc
 
 
 def _current_user_id():

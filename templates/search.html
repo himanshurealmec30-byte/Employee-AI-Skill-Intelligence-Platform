@@ -8,7 +8,7 @@
         <div class="panel-card">
             <h5>Paste Project Description</h5>
             <textarea id="nlpText" class="form-control mb-3" rows="10" placeholder="Looking for a Senior Data Scientist with 5+ years of experience. Must know Python, SQL, Machine Learning, and AWS."></textarea>
-            <button class="btn btn-primary w-100" onclick="extractNlp()">Extract Requirements (NLP)</button>
+            <button id="nlpExtractButton" class="btn btn-primary w-100" onclick="extractNlp()">Extract Requirements (NLP)</button>
         </div>
     </div>
     <div class="col-md-7">
@@ -62,11 +62,13 @@ let latestNlpSkills = [];
 async function extractNlp() {
     const text = document.getElementById('nlpText').value.trim();
     const out = document.getElementById('nlpOutput');
+    const button = document.getElementById('nlpExtractButton');
     if (!text) {
         out.innerHTML = '<div class="alert alert-warning mb-0">Please paste a project description first.</div>';
         return;
     }
     out.innerHTML = '<div class="result-state"><span class="spinner-border spinner-border-sm"></span> Extracting requirements...</div>';
+    button.disabled = true;
     try {
         const res = await fetch('/api/nlp/parse', {
             method: 'POST',
@@ -78,6 +80,8 @@ async function extractNlp() {
         renderNlpRequirements(data);
     } catch (error) {
         out.innerHTML = `<div class="alert alert-danger mb-0">${escapeText(error.message)}</div>`;
+    } finally {
+        button.disabled = false;
     }
 }
 
