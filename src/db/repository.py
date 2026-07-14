@@ -3,6 +3,8 @@ import json
 
 from src.db.connection import execute_query, get_db_connection
 
+_ENTERPRISE_SCHEMA_READY = False
+
 
 def get_all_employees():
     return execute_query(
@@ -114,10 +116,62 @@ def get_learning_for_skill(skill_name):
 
 
 def get_user_by_username(username):
+    ensure_enterprise_user_schema()
     return execute_query(
-        "SELECT * FROM users WHERE username = %s AND is_active = TRUE",
-        (username,),
+        """
+        SELECT * FROM users
+        WHERE is_active = TRUE
+          AND (LOWER(username) = LOWER(%s)
+               OR LOWER(email) = LOWER(%s)
+               OR LOWER(COALESCE(company_email, '')) = LOWER(%s)
+               OR LOWER(COALESCE(employee_login_id, '')) = LOWER(%s))
+        ORDER BY
+            CASE
+                WHEN LOWER(username) = LOWER(%s) THEN 0
+                WHEN LOWER(email) = LOWER(%s) THEN 1
+                WHEN LOWER(COALESCE(company_email, '')) = LOWER(%s) THEN 2
+                WHEN LOWER(COALESCE(employee_login_id, '')) = LOWER(%s) THEN 3
+                ELSE 4
+            END,
+            CASE role
+                WHEN 'admin' THEN 0
+                WHEN 'hr' THEN 1
+                WHEN 'manager' THEN 2
+                ELSE 3
+            END,
+            first_login ASC,
+            COALESCE(temp_password_expires_at, '') DESC,
+            id ASC
+        """,
+        (username, username, username, username, username, username, username, username),
         fetch_one=True,
+    )
+
+
+def get_user_account_by_id(user_id):
+    ensure_enterprise_user_schema()
+    return execute_query(
+        "SELECT * FROM users WHERE id = %s AND is_active = TRUE",
+        (user_id,),
+        fetch_one=True,
+    )
+
+
+def get_user_accounts():
+    ensure_enterprise_user_schema()
+    return execute_query(
+        "SELECT * FROM users WHERE is_active = TRUE ORDER BY id",
+    )
+
+
+def write_audit_log(action, actor_id=None, target_id=None, status="ok", details=None):
+    ensure_enterprise_user_schema()
+    return execute_query(
+        """
+        INSERT INTO audit_logs (action, actor_id, target_id, status, details_json)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (action, actor_id, target_id, status, json.dumps(details or {})),
     )
 
 
@@ -265,6 +319,9 @@ def ensure_upload_schema():
 
 def ensure_enterprise_user_schema():
     """Add enterprise onboarding fields to the existing users table."""
+    global _ENTERPRISE_SCHEMA_READY
+    if _ENTERPRISE_SCHEMA_READY:
+        return
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
             try:
@@ -278,9 +335,22 @@ def ensure_enterprise_user_schema():
                 "ALTER TABLE users ADD COLUMN temp_password_expires_at VARCHAR(40) NULL",
                 "ALTER TABLE users ADD COLUMN source_dataset_id VARCHAR(100) NULL",
                 "ALTER TABLE users ADD COLUMN source_employee_code VARCHAR(255) NULL",
+                "ALTER TABLE users ADD COLUMN source_employee_key VARCHAR(255) NULL",
+                "ALTER TABLE users ADD COLUMN source_file_hash VARCHAR(255) NULL",
+                "ALTER TABLE users ADD COLUMN source_email VARCHAR(255) NULL",
                 "ALTER TABLE users ADD COLUMN created_by INT NULL",
                 "ALTER TABLE users ADD COLUMN created_from_upload BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE users ADD COLUMN created_from_demo BOOLEAN DEFAULT FALSE",
                 "ALTER TABLE users ADD COLUMN account_created BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE users ADD COLUMN account_status VARCHAR(40) NULL",
+                "ALTER TABLE users ADD COLUMN temp_password_used BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE users ADD COLUMN failed_attempts INT DEFAULT 0",
+                "ALTER TABLE users ADD COLUMN locked_until VARCHAR(40) NULL",
+                "ALTER TABLE users ADD COLUMN otp_hash VARCHAR(255) NULL",
+                "ALTER TABLE users ADD COLUMN otp_expires_at VARCHAR(40) NULL",
+                "ALTER TABLE users ADD COLUMN otp_used BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE users ADD COLUMN otp_purpose VARCHAR(40) NULL",
+                "ALTER TABLE users ADD COLUMN name_from_file BOOLEAN DEFAULT FALSE",
             ):
                 try:
                     cursor.execute(column_sql)
@@ -290,11 +360,30 @@ def ensure_enterprise_user_schema():
                 "CREATE INDEX idx_users_company_email ON users(company_email)",
                 "CREATE INDEX idx_users_source_dataset ON users(source_dataset_id)",
                 "CREATE INDEX idx_users_created_by ON users(created_by)",
+                "CREATE INDEX idx_users_employee_login_id ON users(employee_login_id)",
+                "CREATE INDEX idx_users_source_employee_key ON users(source_employee_key)",
             ):
                 try:
                     cursor.execute(stmt)
                 except Exception:
                     pass
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    action VARCHAR(120) NOT NULL,
+                    actor_id INT NULL,
+                    target_id INT NULL,
+                    status VARCHAR(40) DEFAULT 'ok',
+                    details_json JSON,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_audit_action (action),
+                    INDEX idx_audit_actor (actor_id),
+                    INDEX idx_audit_target (target_id)
+                )
+                """
+            )
+    _ENTERPRISE_SCHEMA_READY = True
 
 
 def upsert_user_account(user):
@@ -303,11 +392,14 @@ def upsert_user_account(user):
     return execute_query(
         """
         INSERT INTO users (
-            username, email, password_hash, role, employee_id, company_email,
+            id, username, email, password_hash, role, employee_id, company_email,
             employee_login_id, first_login, temp_password_expires_at,
-            source_dataset_id, source_employee_code, created_by,
-            created_from_upload, account_created, is_active
-        ) VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+            source_dataset_id, source_employee_code, source_employee_key,
+            source_file_hash, source_email, created_by, created_from_upload,
+            created_from_demo, account_created, account_status,
+            temp_password_used, failed_attempts, locked_until, otp_hash,
+            otp_expires_at, otp_used, otp_purpose, name_from_file, is_active
+        ) VALUES (%s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
         ON DUPLICATE KEY UPDATE
             username = VALUES(username),
             password_hash = VALUES(password_hash),
@@ -318,12 +410,26 @@ def upsert_user_account(user):
             temp_password_expires_at = VALUES(temp_password_expires_at),
             source_dataset_id = VALUES(source_dataset_id),
             source_employee_code = VALUES(source_employee_code),
+            source_employee_key = VALUES(source_employee_key),
+            source_file_hash = VALUES(source_file_hash),
+            source_email = VALUES(source_email),
             created_by = VALUES(created_by),
             created_from_upload = VALUES(created_from_upload),
+            created_from_demo = VALUES(created_from_demo),
             account_created = VALUES(account_created),
+            account_status = VALUES(account_status),
+            temp_password_used = VALUES(temp_password_used),
+            failed_attempts = VALUES(failed_attempts),
+            locked_until = VALUES(locked_until),
+            otp_hash = VALUES(otp_hash),
+            otp_expires_at = VALUES(otp_expires_at),
+            otp_used = VALUES(otp_used),
+            otp_purpose = VALUES(otp_purpose),
+            name_from_file = VALUES(name_from_file),
             is_active = TRUE
         """,
         (
+            user.get("id"),
             user.get("username"),
             user.get("email") or user.get("company_email"),
             user.get("password_hash"),
@@ -334,9 +440,22 @@ def upsert_user_account(user):
             user.get("temp_password_expires_at"),
             user.get("source_dataset_id"),
             user.get("source_employee_code"),
+            user.get("source_employee_key"),
+            user.get("source_file_hash"),
+            user.get("source_email"),
             user.get("created_by"),
             bool(user.get("created_from_upload")),
+            bool(user.get("created_from_demo")),
             bool(user.get("account_created")),
+            user.get("account_status") or ("created" if user.get("account_created") else "pending_setup"),
+            bool(user.get("temp_password_used")),
+            int(user.get("failed_attempts") or 0),
+            user.get("locked_until"),
+            user.get("otp_hash"),
+            user.get("otp_expires_at"),
+            bool(user.get("otp_used")),
+            user.get("otp_purpose"),
+            bool(user.get("name_from_file")),
         ),
     )
 
@@ -348,11 +467,14 @@ def upsert_user_accounts(users):
     ensure_enterprise_user_schema()
     sql = """
         INSERT INTO users (
-            username, email, password_hash, role, employee_id, company_email,
+            id, username, email, password_hash, role, employee_id, company_email,
             employee_login_id, first_login, temp_password_expires_at,
-            source_dataset_id, source_employee_code, created_by,
-            created_from_upload, account_created, is_active
-        ) VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+            source_dataset_id, source_employee_code, source_employee_key,
+            source_file_hash, source_email, created_by, created_from_upload,
+            created_from_demo, account_created, account_status,
+            temp_password_used, failed_attempts, locked_until, otp_hash,
+            otp_expires_at, otp_used, otp_purpose, name_from_file, is_active
+        ) VALUES (%s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
         ON DUPLICATE KEY UPDATE
             username = VALUES(username),
             password_hash = VALUES(password_hash),
@@ -363,9 +485,22 @@ def upsert_user_accounts(users):
             temp_password_expires_at = VALUES(temp_password_expires_at),
             source_dataset_id = VALUES(source_dataset_id),
             source_employee_code = VALUES(source_employee_code),
+            source_employee_key = VALUES(source_employee_key),
+            source_file_hash = VALUES(source_file_hash),
+            source_email = VALUES(source_email),
             created_by = VALUES(created_by),
             created_from_upload = VALUES(created_from_upload),
+            created_from_demo = VALUES(created_from_demo),
             account_created = VALUES(account_created),
+            account_status = VALUES(account_status),
+            temp_password_used = VALUES(temp_password_used),
+            failed_attempts = VALUES(failed_attempts),
+            locked_until = VALUES(locked_until),
+            otp_hash = VALUES(otp_hash),
+            otp_expires_at = VALUES(otp_expires_at),
+            otp_used = VALUES(otp_used),
+            otp_purpose = VALUES(otp_purpose),
+            name_from_file = VALUES(name_from_file),
             is_active = TRUE
     """
     with get_db_connection() as conn:
@@ -374,6 +509,7 @@ def upsert_user_accounts(users):
                 cursor.execute(
                     sql,
                     (
+                        user.get("id"),
                         user.get("username"),
                         user.get("email") or user.get("company_email"),
                         user.get("password_hash"),
@@ -384,9 +520,22 @@ def upsert_user_accounts(users):
                         user.get("temp_password_expires_at"),
                         user.get("source_dataset_id"),
                         user.get("source_employee_code"),
+                        user.get("source_employee_key"),
+                        user.get("source_file_hash"),
+                        user.get("source_email"),
                         user.get("created_by"),
                         bool(user.get("created_from_upload")),
+                        bool(user.get("created_from_demo")),
                         bool(user.get("account_created")),
+                        user.get("account_status") or ("created" if user.get("account_created") else "pending_setup"),
+                        bool(user.get("temp_password_used")),
+                        int(user.get("failed_attempts") or 0),
+                        user.get("locked_until"),
+                        user.get("otp_hash"),
+                        user.get("otp_expires_at"),
+                        bool(user.get("otp_used")),
+                        user.get("otp_purpose"),
+                        bool(user.get("name_from_file")),
                     ),
                 )
             return len(users)

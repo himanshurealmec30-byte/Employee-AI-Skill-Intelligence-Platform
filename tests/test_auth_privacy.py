@@ -156,6 +156,36 @@ class EmployeePrivacyTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["Location"], "/dashboard")
 
+    def test_admin_session_refresh_does_not_become_employee_with_same_id(self):
+        admin_user = {
+            "id": 1,
+            "username": "admin",
+            "role": "admin",
+            "employee_id": None,
+            "first_login": False,
+        }
+        mysql_employee_same_id = {
+            "id": 1,
+            "username": "Employee 1",
+            "role": "employee",
+            "employee_id": "TB1001",
+            "first_login": False,
+        }
+        with self.client.session_transaction() as session:
+            session["user"] = {
+                "id": 1,
+                "username": "admin",
+                "role": "admin",
+                "employee_id": None,
+            }
+        with patch("run._get_registered_user", return_value=admin_user), \
+             patch("run._get_registered_user_by_id", return_value=mysql_employee_same_id):
+            response = self.client.get("/dashboard")
+        self.assertEqual(response.status_code, 200)
+        with self.client.session_transaction() as session:
+            self.assertEqual(session["user"]["role"], "admin")
+            self.assertEqual(session["user"]["username"], "admin")
+
     def test_admin_can_request_password_reset_by_username(self):
         admin = {
             "id": 1,
@@ -305,6 +335,81 @@ class EmployeePrivacyTests(unittest.TestCase):
         self.assertEqual(users[0]["source_dataset_id"], "old-dataset")
         self.assertEqual(users[1]["source_dataset_id"], "new-dataset")
         self.assertTrue(users[1]["first_login"])
+
+    def test_pending_employee_reset_prefers_newest_temp_password(self):
+        users = [
+            {
+                "id": 6001,
+                "employee_id": "TB1001",
+                "username": "Employee 1",
+                "email": "employee.1.tb1001@talentbeacon.local",
+                "company_email": "employee.1.tb1001@talentbeacon.local",
+                "password_hash": generate_password_hash("ExpiredPass123!"),
+                "role": "employee",
+                "first_login": True,
+                "created_by": 10,
+                "created_from_upload": True,
+                "source_dataset_id": "active-dataset",
+                "source_employee_code": "active-dataset:1",
+                "source_employee_key": "file:file-hash:row:1",
+                "source_file_hash": "file-hash",
+                "temp_password_expires_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "id": 6002,
+                "employee_id": "TB1001",
+                "username": "Employee 1",
+                "email": "employee.1.tb1001@talentbeacon.local",
+                "company_email": "employee.1.tb1001@talentbeacon.local",
+                "password_hash": generate_password_hash("FreshPass123!"),
+                "role": "employee",
+                "first_login": True,
+                "created_by": 10,
+                "created_from_upload": True,
+                "source_dataset_id": "active-dataset",
+                "source_employee_code": "active-dataset:1",
+                "source_employee_key": "file:file-hash:row:1",
+                "source_file_hash": "file-hash",
+                "temp_password_expires_at": "2099-01-01T00:00:00+00:00",
+            },
+        ]
+        df = pd.DataFrame([{
+            "Employee_ID": 1,
+            "Display_Employee_ID": 1,
+            "Employee_Code": "active-dataset:1",
+            "Name": "Employee 1",
+            "Email": "",
+        }])
+        with patch("run._active_dataset_id_for_actor", return_value="active-dataset"), \
+             patch("run._active_dataset_hash_for_actor", return_value="file-hash"), \
+             patch("run.load_active_employee_df", return_value=df), \
+             patch("run._load_registered_users", return_value=users), \
+             patch("run._save_registered_users"), \
+             patch("run._sync_user_accounts_to_mysql"), \
+             patch("run._audit"):
+            result = _create_accounts_from_active_dataset(actor_id=10, reset_existing_passwords=False)
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(users[1]["temp_password_expires_at"], "2099-01-01T00:00:00+00:00")
+
+    def test_correct_expired_temporary_password_gets_grace_login(self):
+        user = {
+            "id": 7001,
+            "username": "Employee Expired",
+            "role": "employee",
+            "employee_id": "TB7001",
+            "password_hash": generate_password_hash("ExpiredPass123!"),
+            "first_login": True,
+            "temp_password_expires_at": "2026-01-01T00:00:00+00:00",
+            "failed_attempts": 0,
+            "locked_until": None,
+        }
+        with patch("run._save_registered_user") as save_user, patch("run._audit"):
+            authed, error = _authenticate_user.__globals__["_authenticate_registered_user"](user, "ExpiredPass123!")
+        self.assertIsNotNone(authed)
+        self.assertIsNone(error)
+        self.assertNotEqual(user["temp_password_expires_at"], "2026-01-01T00:00:00+00:00")
+        save_user.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -1,56 +1,5 @@
 === DATASET PROFILE ===
-Shape: (4998, 13)
+No default employee dataset is bundled with the project.
 
-=== COLUMNS & TYPES ===
-Employee_ID: int64
-Department: str
-Job_Title: str
-Years_of_Experience: int64
-Education_Level: str
-Performance_Score: int64
-Projects_Handled: int64
-Employee_Satisfaction_Score: float64
-Certifications: str
-Skills: str
-Hire_Date: datetime64[us]
-Parsed_Skills: object
-Parsed_Certifications: object
-
-=== MISSING VALUES ===
-Employee_ID                    0
-Department                     0
-Job_Title                      0
-Years_of_Experience            0
-Education_Level                0
-Performance_Score              0
-Projects_Handled               0
-Employee_Satisfaction_Score    0
-Certifications                 0
-Skills                         0
-Hire_Date                      0
-Parsed_Skills                  0
-Parsed_Certifications          0
-
-=== CATEGORICAL DISTRIBUTIONS ===
-
-Departments:
-Department
-Marketing           591
-Finance             581
-Operations          580
-Customer Support    570
-Engineering         562
-Sales               545
-Legal               527
-HR                  523
-IT                  519
-
-Job Titles:
-Job_Title
-Specialist    738
-Developer     735
-Analyst       727
-Engineer      715
-Manager       706
-Technician    694
-Consultant    683
+Upload an employee CSV/Excel file from the Employee Files page, make it active,
+then run EDA/model training to regenerate this report for that uploaded file.

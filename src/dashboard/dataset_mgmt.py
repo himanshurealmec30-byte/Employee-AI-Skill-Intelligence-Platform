@@ -14,9 +14,6 @@ def render_dataset_mgmt_page():
     st.markdown("## ⚙️ Dataset Management & Quality Assurance")
     st.write("Upload custom employee CSV datasets, run schema integrity audits, and track data quality metrics.")
     
-    # Session state for loading file path
-    default_csv = "employee management system cleaned data output2.csv"
-    
     col_upload, col_report = st.columns([1, 1])
     
     with col_upload:

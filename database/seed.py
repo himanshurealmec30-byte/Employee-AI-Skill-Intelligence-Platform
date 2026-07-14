@@ -136,7 +136,11 @@ def seed_roles_and_courses(cursor):
 def seed_employees_from_csv():
     csv_path = config.DEFAULT_CSV_PATH
     if not csv_path.exists():
-        raise FileNotFoundError(f"CSV not found: {csv_path}")
+        print(f"No default employee CSV found at {csv_path}. Skipping employee seed.")
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                seed_roles_and_courses(cursor)
+        return
 
     df = preprocess_data(str(csv_path))
     with get_db_connection() as conn:
@@ -224,4 +228,4 @@ if __name__ == "__main__":
     init_schema()
     seed_employees_from_csv()
     seed_users()
-    print("Database seed complete.")
+    print("Database seed complete. Upload employee data from the Employee Files page.")

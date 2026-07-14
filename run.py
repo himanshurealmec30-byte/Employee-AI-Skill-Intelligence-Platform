@@ -1,5 +1,6 @@
 """Flask application factory and routes for TalentBeacon."""
 import json
+import math
 import os
 import re
 import secrets
@@ -43,13 +44,38 @@ from src.utils.skills import contains_all_skills, split_skills
 def create_app():
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.secret_key = config.SECRET_KEY
+    app.config["MAX_CONTENT_LENGTH"] = int(getattr(config, "MAX_UPLOAD_MB", 50)) * 1024 * 1024
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = bool(getattr(config, "IS_PRODUCTION", False))
+    app.config["PREFERRED_URL_SCHEME"] = "https" if getattr(config, "IS_PRODUCTION", False) else "http"
+    app.config["WTF_CSRF_ENABLED"] = bool(getattr(config, "CSRF_ENABLED", False))
+    app.config.setdefault("rate_limit_buckets", {})
+
+    def csrf_token():
+        token = session.get("_csrf_token")
+        if not token:
+            token = secrets.token_urlsafe(32)
+            session["_csrf_token"] = token
+        return token
+
+    @app.context_processor
+    def inject_security_helpers():
+        return {"csrf_token": csrf_token}
 
     @app.before_request
     def load_service():
         if "user" not in session:
             app.config["service"] = None
             return
-        registered_user = _get_registered_user_by_id(session["user"].get("id")) or _get_registered_user(session["user"].get("username"))
+        session_user = session["user"]
+        if session_user.get("role") in {"admin", "hr", "manager"}:
+            # Privileged demo/login users can share numeric ids with uploaded
+            # employee accounts. Never refresh admin/HR/manager sessions by id
+            # unless the username itself resolves to that privileged account.
+            registered_user = _get_registered_user(session_user.get("username"))
+        else:
+            registered_user = _get_registered_user_by_id(session_user.get("id")) or _get_registered_user(session_user.get("username"))
         if registered_user:
             session["user"].update({
                 "id": registered_user["id"],
@@ -69,6 +95,20 @@ def create_app():
             app.config["service"] = services[user_key]
         except Exception:
             app.config["service"] = None
+
+    @app.before_request
+    def protect_mutating_requests():
+        if not app.config.get("WTF_CSRF_ENABLED"):
+            return
+        if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+            return
+        sent = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
+        expected = session.get("_csrf_token")
+        if not expected or not sent or not secrets.compare_digest(str(expected), str(sent)):
+            if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
+                return jsonify({"error": "Invalid security token. Refresh the page and try again."}), 400
+            flash("Invalid security token. Refresh the page and try again.", "danger")
+            return redirect(request.referrer or url_for("login"))
 
     def login_required(f):
         @wraps(f)
@@ -101,6 +141,10 @@ def create_app():
     @app.route("/login", methods=["GET", "POST"])
     def login():
         if request.method == "POST":
+            limited = _rate_limit("login", limit=8, minutes=15)
+            if limited:
+                flash(limited, "danger")
+                return render_template("login.html"), 429
             username = request.form.get("username", "").strip()
             password = request.form.get("password", "")
             user, error = _authenticate_user(username, password)
@@ -152,6 +196,10 @@ def create_app():
             flash("Your account is already active.", "info")
             return redirect(url_for("dashboard"))
         if request.method == "POST":
+            limited = _rate_limit("first_login", limit=8, minutes=15)
+            if limited:
+                flash(limited, "danger")
+                return redirect(url_for("first_login_page"))
             otp = request.form.get("otp", "").strip()
             password = request.form.get("password", "")
             confirm = request.form.get("confirm_password", "")
@@ -174,17 +222,29 @@ def create_app():
             is_demo=_is_development(),
         )
 
-    @app.route("/first-login/resend-otp", methods=["POST"])
+    @app.route("/first-login/resend-otp", methods=["GET", "POST"])
     @login_required
     def resend_first_login_otp_page():
+        if request.method == "GET":
+            return redirect(url_for("first_login_page"))
+        limited = _rate_limit("first_login_otp", limit=5, minutes=15)
+        if limited:
+            flash(limited, "danger")
+            return redirect(url_for("first_login_page"))
         user_id = session.get("first_login_user_id") or _current_user_id()
         user = _get_registered_user_by_id(user_id)
         if not user or not user.get("first_login"):
+            session.pop("first_login_user_id", None)
+            session.pop("first_login_demo_otp", None)
             flash("First-login session expired. Please sign in again.", "warning")
             return redirect(url_for("login"))
-        demo_otp = _issue_otp(user, "first_login")
-        session["first_login_demo_otp"] = demo_otp
-        flash("New OTP generated. It is valid for 5 minutes.", "success")
+        try:
+            demo_otp = _issue_otp(user, "first_login")
+            session["first_login_demo_otp"] = demo_otp
+            flash("New OTP generated. It is valid for 5 minutes.", "success")
+        except Exception as exc:
+            _audit("otp_resend_failed", target_id=user.get("id"), status="failed", details={"error": str(exc)})
+            flash("Could not generate OTP. Please sign in again or ask Admin/HR to reset the account.", "danger")
         return redirect(url_for("first_login_page"))
 
     @app.route("/forgot-password", methods=["GET", "POST"])
@@ -192,6 +252,15 @@ def create_app():
         demo_otp = None
         otp_expires_at = None
         if request.method == "POST":
+            limited = _rate_limit("forgot_password", limit=5, minutes=15)
+            if limited:
+                flash(limited, "danger")
+                return render_template(
+                    "forgot_password.html",
+                    demo_otp=None,
+                    otp_expires_at=None,
+                    is_demo=_is_development(),
+                ), 429
             identity = request.form.get("identity", "").strip().lower()
             user = _find_password_reset_user(identity)
             if user:
@@ -208,6 +277,10 @@ def create_app():
 
     @app.route("/reset-password", methods=["POST"])
     def reset_password_page():
+        limited = _rate_limit("reset_password", limit=8, minutes=15)
+        if limited:
+            flash(limited, "danger")
+            return redirect(url_for("forgot_password_page"))
         identity = request.form.get("identity", "").strip().lower()
         otp = request.form.get("otp", "").strip()
         password = request.form.get("password", "")
@@ -258,7 +331,7 @@ def create_app():
 
     @app.route("/recommendations")
     @login_required
-    @role_required("admin", "manager")
+    @role_required("admin", "hr", "manager")
     def recommendations():
         svc = app.config.get("service")
         roles = svc.get_analytics()["roles_available"] if svc else []
@@ -422,6 +495,8 @@ def create_app():
     @role_required("admin", "hr")
     def admin_users_page():
         owner_id = _current_data_owner_id()
+        page = max(_safe_int(request.args.get("page") or 1, 1), 1)
+        per_page = min(max(_safe_int(request.args.get("per_page") or 100, 100), 25), 500)
         created_user = None
         generated_accounts = _consume_generated_credentials(owner_id)
         if request.method == "POST":
@@ -432,25 +507,28 @@ def create_app():
                 flash(f"Created {created_user['role'].upper()} account for {created_user['username']}.", "success")
             except Exception as exc:
                 flash(str(exc), "danger")
-        elif not generated_accounts:
-            try:
-                result = _create_accounts_from_active_dataset(actor_id=owner_id, reset_existing_passwords=False)
-                generated_accounts = result["accounts"]
-                if result["created"]:
-                    flash(f"Prepared {result['created']} new employee login accounts from the active uploaded file.", "success")
-            except Exception:
-                generated_accounts = []
-        managed_users = _managed_users_for_actor(owner_id)
-        _sync_user_accounts_to_mysql(managed_users)
+        all_managed_users = _managed_users_for_actor(owner_id)
+        total_managed_users = len(all_managed_users)
+        start = (page - 1) * per_page
+        managed_users = all_managed_users[start:start + per_page]
         return render_template(
             "admin_users.html",
             managed_users=managed_users,
+            total_managed_users=total_managed_users,
+            page=page,
+            per_page=per_page,
+            page_count=max(1, math.ceil(total_managed_users / per_page)),
             created_user=created_user,
             generated_accounts=generated_accounts,
             generated_passwords={
                 str(account.get("employee_id") or ""): account.get("temporary_password")
                 for account in generated_accounts
                 if account.get("temporary_password")
+            },
+            generated_passwords_by_email={
+                str(account.get("company_email") or "").lower(): account.get("temporary_password")
+                for account in generated_accounts
+                if account.get("temporary_password") and account.get("company_email")
             },
             user=session["user"],
             is_demo=_is_development(),
@@ -462,13 +540,15 @@ def create_app():
     def admin_users_from_dataset_page():
         owner_id = _current_data_owner_id()
         try:
-            result = _create_accounts_from_active_dataset(actor_id=owner_id, reset_existing_passwords=True)
-            flash(f"Prepared {result['created']} new and {result.get('reset', 0)} pending employee login credentials from active file. {result['skipped']} completed accounts were kept.", "success")
+            page = max(_safe_int(request.args.get("page") or 1, 1), 1)
+            per_page = min(max(_safe_int(request.args.get("per_page") or 100, 100), 25), 500)
+            result = _reset_visible_pending_accounts(owner_id, page=page, per_page=per_page)
+            flash(f"Prepared {result.get('reset', 0)} fresh pending employee login credentials for this page. {result['skipped']} completed accounts were kept.", "success")
             if result["accounts"]:
                 _store_generated_credentials(owner_id, result["accounts"])
         except Exception as exc:
             flash(str(exc), "danger")
-        return redirect(url_for("admin_users_page"))
+        return redirect(url_for("admin_users_page", page=request.args.get("page", 1), per_page=request.args.get("per_page", 100)))
 
     @app.route("/admin/users/<int:user_id>/role", methods=["POST"])
     @login_required
@@ -659,7 +739,7 @@ def create_app():
 
     @app.route("/search")
     @login_required
-    @role_required("admin", "manager")
+    @role_required("admin", "hr", "manager")
     def search_page():
         svc = app.config.get("service")
         depts = list(svc.df["Department"].unique()) if svc else []
@@ -741,7 +821,7 @@ def create_app():
 
     @app.route("/api/search")
     @login_required
-    @role_required("admin", "manager")
+    @role_required("admin", "hr", "manager")
     def api_search():
         svc = app.config.get("service")
         skill = request.args.get("skill")
@@ -772,7 +852,7 @@ def create_app():
         role = session["user"].get("role")
         if not _can_access_employee_record(employee_id):
             return jsonify({"error": "Unauthorized"}), 403
-        if role not in {"admin", "manager", "employee"}:
+        if role not in {"admin", "hr", "manager", "employee"}:
             return jsonify({"error": "Unauthorized"}), 403
         svc = app.config.get("service")
         role_name = request.args.get("role_name")
@@ -950,12 +1030,12 @@ def _current_data_owner_id():
     if "user" not in session:
         return None
     role = session["user"].get("role")
+    if role == "hr":
+        return 1
     if role in {"employee", "hr"}:
         registered_user = _get_registered_user_by_id(session["user"].get("id"))
         if registered_user and registered_user.get("created_by"):
             return registered_user.get("created_by")
-        if role == "hr":
-            return 1
         return (registered_user or {}).get("created_by") or session["user"].get("id")
     return session["user"].get("id")
 
@@ -1043,8 +1123,44 @@ def _from_iso(value):
         return None
 
 
+def _safe_int(value, default=0):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        match = re.search(r"\d+", str(value or ""))
+        return int(match.group()) if match else default
+
+
 def _is_development():
     return APP_ENV.lower() in {"development", "dev", "local", "demo"}
+
+
+def _rate_limit(bucket, limit=10, minutes=15):
+    if not getattr(config, "RATE_LIMIT_ENABLED", True):
+        return None
+    try:
+        app = create_app.__globals__.get("current_app")
+    except Exception:
+        app = None
+    # Import here to keep test imports simple and avoid circular Flask globals.
+    try:
+        from flask import current_app
+        store = current_app.config.setdefault("rate_limit_buckets", {})
+        ip = request.headers.get("X-Forwarded-For", request.remote_addr or "local").split(",")[0].strip()
+        key = f"{bucket}:{ip}"
+        now = _now()
+        window_start = now - timedelta(minutes=minutes)
+        hits = [
+            stamp for stamp in store.get(key, [])
+            if _from_iso(stamp) and _from_iso(stamp) > window_start
+        ]
+        if len(hits) >= limit:
+            return "Too many attempts. Please wait a few minutes and try again."
+        hits.append(_to_iso(now))
+        store[key] = hits
+    except Exception:
+        return None
+    return None
 
 
 def _hash_secret(value, rounds=8):
@@ -1060,7 +1176,9 @@ def _check_secret(value, hashed):
 
 
 def _random_password(length=14):
-    alphabet = string.ascii_letters + string.digits + "!@#$%&*"
+    # Avoid characters such as "*" and "\" because they are easy to misread or
+    # get escaped when users copy passwords through chat, docs, or Markdown.
+    alphabet = string.ascii_letters + string.digits + "!@#$%&"
     while True:
         password = "".join(secrets.choice(alphabet) for _ in range(length))
         if _strong_password(password):
@@ -1082,7 +1200,6 @@ def _strong_password(password):
 
 
 def _audit(action, actor_id=None, target_id=None, status="ok", details=None):
-    AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "timestamp": _to_iso(_now()),
         "action": action,
@@ -1091,23 +1208,42 @@ def _audit(action, actor_id=None, target_id=None, status="ok", details=None):
         "status": status,
         "details": details or {},
     }
-    with AUDIT_LOG_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record) + "\n")
+    try:
+        from src.db.repository import write_audit_log
+        write_audit_log(action, actor_id=actor_id, target_id=target_id, status=status, details=details or {})
+    except Exception:
+        AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with AUDIT_LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record) + "\n")
 
 
 def _save_registered_user(updated_user):
-    users = _load_registered_users()
+    if _sync_user_account_to_mysql(updated_user):
+        return updated_user
+    users = _load_registered_users_from_json()
     for index, user in enumerate(users):
         if int(user.get("id")) == int(updated_user.get("id")):
             users[index] = updated_user
-            _save_registered_users(users)
+            if _is_development():
+                _write_registered_users_json(users)
             return updated_user
     users.append(updated_user)
-    _save_registered_users(users)
+    if _is_development():
+        _write_registered_users_json(users)
     return updated_user
 
 
 def _get_registered_user_by_id(user_id):
+    privileged_json_user = _get_json_user_by_id(user_id, privileged_only=True)
+    if privileged_json_user:
+        return privileged_json_user
+    try:
+        from src.db.repository import get_user_account_by_id
+        user = get_user_account_by_id(user_id)
+        if user:
+            return _normalize_user_record(user)
+    except Exception:
+        pass
     for user in _load_registered_users():
         if str(user.get("id")) == str(user_id):
             return user
@@ -1119,10 +1255,11 @@ def _authenticate_registered_user(local_user, password):
     if locked_until and locked_until > _now():
         _audit("login_failed", target_id=local_user.get("id"), status="locked", details={"reason": "account_locked"})
         return None, "Account locked. Please try again later or reset your password."
-    temp_expires = _from_iso(local_user.get("temp_password_expires_at"))
-    if temp_expires and temp_expires < _now() and local_user.get("first_login"):
-        return None, "Temporary password expired. Ask Admin/HR to reset the account."
     if _check_secret(password, local_user["password_hash"]):
+        temp_expires = _from_iso(local_user.get("temp_password_expires_at"))
+        if temp_expires and temp_expires < _now() and local_user.get("first_login"):
+            local_user["temp_password_expires_at"] = _to_iso(_now() + timedelta(minutes=OTP_MINUTES))
+            _audit("temp_password_grace_login", target_id=local_user.get("id"), details={"reason": "correct_expired_temp_password"})
         local_user["failed_attempts"] = 0
         local_user["locked_until"] = None
         _save_registered_user(local_user)
@@ -1142,9 +1279,19 @@ def _authenticate_user(username, password):
     """Try reset/created local users first, then DB auth, then demo credentials."""
     if not username:
         return None, "Incorrect username."
+    identity = str(username or "").strip().lower()
+    privileged_json_user = _get_json_user_by_identity(identity, privileged_only=True)
+    if privileged_json_user and _check_secret(password, privileged_json_user.get("password_hash")):
+        return _authenticate_registered_user(privileged_json_user, password)
+
     local_user = _get_registered_user(username)
     if local_user:
-        return _authenticate_registered_user(local_user, password)
+        authenticated_user, error = _authenticate_registered_user(local_user, password)
+        if authenticated_user:
+            return authenticated_user, None
+        if privileged_json_user and privileged_json_user.get("id") != local_user.get("id"):
+            return _authenticate_registered_user(privileged_json_user, password)
+        return None, error
 
     found_user = None
     try:
@@ -1169,7 +1316,40 @@ def _authenticate_user(username, password):
     return None, "Incorrect username."
 
 
-def _load_registered_users():
+def _normalize_user_record(user):
+    if not user:
+        return user
+    user = dict(user)
+    if "company_email" not in user or not user.get("company_email"):
+        user["company_email"] = user.get("email")
+    if "employee_id" not in user or not user.get("employee_id"):
+        user["employee_id"] = user.get("employee_login_id")
+    for key in (
+        "first_login",
+        "temp_password_used",
+        "created_from_upload",
+        "created_from_demo",
+        "account_created",
+        "otp_used",
+        "name_from_file",
+    ):
+        user[key] = bool(user.get(key))
+    user["failed_attempts"] = int(user.get("failed_attempts") or 0)
+    if "account_created" not in user:
+        user["account_created"] = not bool(user.get("first_login"))
+    user["account_status"] = user.get("account_status") or ("created" if user.get("account_created") else "pending_setup")
+    return user
+
+
+def _load_registered_users_from_mysql():
+    try:
+        from src.db.repository import get_user_accounts
+        return [_normalize_user_record(user) for user in get_user_accounts()]
+    except Exception:
+        return []
+
+
+def _load_registered_users_from_json():
     try:
         if REGISTERED_USERS_PATH.exists():
             users = json.loads(REGISTERED_USERS_PATH.read_text(encoding="utf-8-sig"))
@@ -1210,9 +1390,118 @@ def _load_registered_users():
     return []
 
 
+def _read_registered_users_json_raw():
+    try:
+        if REGISTERED_USERS_PATH.exists():
+            users = json.loads(REGISTERED_USERS_PATH.read_text(encoding="utf-8-sig"))
+            return users if isinstance(users, list) else [users]
+    except Exception:
+        pass
+    return []
+
+
+def _get_json_user_by_id(user_id, privileged_only=False):
+    for user in _read_registered_users_json_raw():
+        if str(user.get("id")) != str(user_id):
+            continue
+        normalized = _normalize_user_record(user)
+        if privileged_only and str(normalized.get("role") or "").lower() not in {"admin", "hr", "manager"}:
+            continue
+        return normalized
+    return None
+
+
+def _get_json_user_by_identity(identity, privileged_only=False):
+    identity = str(identity or "").strip().lower()
+    if not identity:
+        return None
+    matches = []
+    for user in _read_registered_users_json_raw():
+        normalized = _normalize_user_record(user)
+        if privileged_only and str(normalized.get("role") or "").lower() not in {"admin", "hr", "manager"}:
+            continue
+        if (
+            str(normalized.get("username") or "").lower() == identity
+            or str(normalized.get("email") or "").lower() == identity
+            or str(normalized.get("company_email") or "").lower() == identity
+            or str(normalized.get("employee_login_id") or "").lower() == identity
+            or str(normalized.get("employee_id") or "").lower() == identity
+        ):
+            matches.append(normalized)
+    if not matches:
+        return None
+    matches.sort(
+        key=lambda user: (
+            0 if str(user.get("username") or "").lower() == identity else 1,
+            0 if str(user.get("role") or "").lower() in {"admin", "hr", "manager"} else 1,
+            bool(user.get("first_login")),
+            str(user.get("created_at") or ""),
+        )
+    )
+    return matches[0]
+
+
+def _load_registered_users():
+    mysql_users = _load_registered_users_from_mysql()
+    json_users = _load_registered_users_from_json()
+    merged = {}
+
+    def keys_for(user):
+        keys = []
+        for key in ("id", "username", "email", "company_email", "employee_login_id", "employee_id"):
+            value = str(user.get(key) or "").strip().lower()
+            if value:
+                keys.append(f"{key}:{value}")
+        return keys
+
+    for user in mysql_users:
+        normalized = _normalize_user_record(user)
+        primary = f"id:{normalized.get('id')}"
+        merged[primary] = normalized
+        for key in keys_for(normalized):
+            merged.setdefault(key, normalized)
+    for user in json_users:
+        normalized = _normalize_user_record(user)
+        role = str(normalized.get("role") or "").lower()
+        is_privileged = role in {"admin", "hr", "manager"} or str(normalized.get("username") or "").lower() in {"admin", "hr", "manager"}
+        primary = f"id:{normalized.get('id')}"
+        existing = merged.get(primary)
+        if existing is None or is_privileged:
+            merged[primary] = normalized
+        for key in keys_for(normalized):
+            existing = merged.get(key)
+            if existing is None or is_privileged:
+                merged[key] = normalized
+
+    seen = set()
+    users = []
+    for user in merged.values():
+        unique = str(user.get("id") or user.get("email") or user.get("username"))
+        if unique in seen:
+            continue
+        seen.add(unique)
+        users.append(user)
+    return users
+
+
 def _save_registered_users(users):
-    REGISTERED_USERS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REGISTERED_USERS_PATH.write_text(json.dumps(users, indent=2), encoding="utf-8")
+    synced = _sync_user_accounts_to_mysql(users)
+    if _is_development() and not synced:
+        _write_registered_users_json(users)
+
+
+def _write_registered_users_json(users):
+    try:
+        REGISTERED_USERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        REGISTERED_USERS_PATH.write_text(json.dumps(users, indent=2, default=str), encoding="utf-8")
+        return True
+    except OSError as exc:
+        _audit(
+            "registered_user_json_write_failed",
+            status="failed",
+            details={"error": str(exc), "path": str(REGISTERED_USERS_PATH)},
+        )
+        return False
 
 
 def _sync_user_account_to_mysql(user):
@@ -1220,8 +1509,9 @@ def _sync_user_account_to_mysql(user):
         from src.db.repository import upsert_user_account
 
         upsert_user_account(user)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def _sync_user_accounts_to_mysql(users):
@@ -1229,8 +1519,9 @@ def _sync_user_accounts_to_mysql(users):
         from src.db.repository import upsert_user_accounts
 
         upsert_user_accounts(users)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def _credential_bucket_key(actor_id):
@@ -1273,33 +1564,31 @@ def _consume_generated_credentials(actor_id):
 
 def _get_registered_user(identity):
     identity = str(identity or "").strip().lower()
-    matches = []
-    for user in _load_registered_users():
-        if (
-            user.get("username", "").lower() == identity
-            or user.get("email", "").lower() == identity
-            or user.get("company_email", "").lower() == identity
-            or str(user.get("employee_id") or "").lower() == identity
-        ):
-            matches.append(user)
-    if not matches:
-        return None
-    matches.sort(
-        key=lambda user: (
-            bool(user.get("first_login")),
-            0 if str(user.get("employee_id") or "").lower() == identity else 1,
-            str(user.get("created_at") or ""),
-        )
-    )
-    return matches[0]
+    try:
+        from src.db.repository import get_user_by_username
+        user = get_user_by_username(identity)
+        if user:
+            normalized = _normalize_user_record(user)
+            if str(normalized.get("role") or "").lower() in {"admin", "hr", "manager"}:
+                return normalized
+            db_user = normalized
+        else:
+            db_user = None
+    except Exception:
+        db_user = None
+    privileged_json_user = _get_json_user_by_identity(identity, privileged_only=True)
+    if privileged_json_user:
+        _sync_user_account_to_mysql(privileged_json_user)
+        return privileged_json_user
+    return db_user or _get_json_user_by_identity(identity)
 
 
 def _demo_user_definitions():
     return {
         "admin": {"id": 1, "username": "admin", "role": "admin", "employee_id": None, "password": "admin123", "email": "admin@talentbeacon.local"},
-        "manager": {"id": 2, "username": "manager", "role": "manager", "employee_id": None, "password": "manager123", "email": "manager@talentbeacon.local"},
-        "hr": {"id": 4, "username": "hr", "role": "hr", "employee_id": None, "password": "hr123", "email": "hr@talentbeacon.local"},
-        "employee": {"id": 3, "username": "employee", "role": "employee", "employee_id": 1, "password": "employee123", "email": "employee@talentbeacon.local"},
+        "manager": {"id": -102, "username": "manager", "role": "manager", "employee_id": None, "password": "manager123", "email": "manager@talentbeacon.local"},
+        "hr": {"id": -104, "username": "hr", "role": "hr", "employee_id": None, "password": "hr123", "email": "hr@talentbeacon.local"},
+        "employee": {"id": -103, "username": "employee", "role": "employee", "employee_id": 1, "password": "employee123", "email": "employee@talentbeacon.local"},
     }
 
 
@@ -1346,50 +1635,46 @@ def _managed_users_for_actor(actor_id):
     active_dataset_id = _active_dataset_id_for_actor(actor_id)
     if not active_dataset_id:
         return []
-    active_file_hash = _active_dataset_hash_for_actor(actor_id)
-    users = _load_registered_users()
+    users = _load_registered_users_from_mysql()
+    if not users:
+        users = _load_registered_users_from_json()
     owned_users = [
         user for user in users
         if str(user.get("created_by")) == str(actor_id) and user.get("created_from_upload")
+        and str(user.get("source_dataset_id") or "") == str(active_dataset_id)
     ]
-    try:
-        df = load_active_employee_df(user_id=actor_id)
-        if df.empty:
-            return []
-        active_keys = []
-        for _, row in df.iterrows():
-            key = _employee_identity_key(row.to_dict(), active_file_hash)
-            if key:
-                active_keys.append(key)
-        users_by_key = {}
-        for user in owned_users:
-            key = _user_employee_identity_key(user)
-            if not key:
-                continue
-            current = users_by_key.get(key)
-            if current is None:
-                users_by_key[key] = user
-                continue
-            current_ready = not bool(current.get("first_login"))
-            user_ready = not bool(user.get("first_login"))
-            if user_ready and not current_ready:
-                users_by_key[key] = user
-            elif user_ready == current_ready and str(user.get("created_at") or "") < str(current.get("created_at") or ""):
-                users_by_key[key] = user
-        selected = []
-        selected_ids = set()
-        for key in active_keys:
-            user = users_by_key.get(key)
-            if not user:
-                continue
-            user_id = str(user.get("id") or "")
-            if user_id in selected_ids:
-                continue
-            selected_ids.add(user_id)
-            selected.append(user)
-        return selected
-    except Exception:
-        return []
+    owned_users.sort(key=lambda user: (_employee_number_sort_key(user.get("employee_id")), str(user.get("created_at") or "")))
+    return owned_users
+
+
+def _reset_visible_pending_accounts(actor_id, page=1, per_page=100):
+    users = _managed_users_for_actor(actor_id)
+    start = (max(page, 1) - 1) * per_page
+    visible_users = users[start:start + per_page]
+    reset_accounts = []
+    skipped = 0
+    for user in visible_users:
+        if not user.get("first_login"):
+            skipped += 1
+            continue
+        temporary_password = _random_password()
+        user["password_hash"] = _hash_secret(temporary_password, rounds=5)
+        user["temp_password_used"] = False
+        user["temp_password_expires_at"] = _to_iso(_now() + timedelta(hours=TEMP_PASSWORD_HOURS))
+        user["failed_attempts"] = 0
+        user["locked_until"] = None
+        user["account_created"] = False
+        user["account_status"] = "pending_setup"
+        _sync_user_account_to_mysql(user)
+        reset_accounts.append(_display_generated_account(user, temporary_password, action="reset"))
+    if reset_accounts:
+        _audit("visible_temp_password_reset", actor_id=actor_id, status="ok", details={"count": len(reset_accounts), "page": page, "per_page": per_page})
+    return {"created": 0, "reset": len(reset_accounts), "skipped": skipped, "accounts": reset_accounts}
+
+
+def _employee_number_sort_key(value):
+    match = re.search(r"\d+", str(value or ""))
+    return int(match.group()) if match else 0
 
 
 def _create_user_account(name, role="employee", actor_id=None):
@@ -1562,6 +1847,11 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
         candidate_ready = not bool(candidate.get("first_login"))
         if candidate_ready != current_ready:
             return candidate if candidate_ready else current
+        if not candidate_ready:
+            current_expires = _from_iso(current.get("temp_password_expires_at")) or datetime.min.replace(tzinfo=timezone.utc)
+            candidate_expires = _from_iso(candidate.get("temp_password_expires_at")) or datetime.min.replace(tzinfo=timezone.utc)
+            if candidate_expires > current_expires:
+                return candidate
         return current
 
     users_by_email = {}
@@ -1637,6 +1927,7 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
                 existing_user["temp_password_expires_at"] = _to_iso(_now() + timedelta(hours=TEMP_PASSWORD_HOURS))
                 existing_user["failed_attempts"] = 0
                 existing_user["locked_until"] = None
+                _sync_user_account_to_mysql(existing_user)
                 reset_accounts.append(_display_generated_account(existing_user, temporary_password, action="reset"))
                 changed = True
             else:
@@ -1679,6 +1970,7 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
         }
         next_user_id += 1
         users.append(user)
+        _sync_user_account_to_mysql(user)
         used_emails.add(company_email)
         users_by_email[company_email] = user
         if source_employee_key:
@@ -1809,4 +2101,4 @@ def _next_registered_user_id(users):
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=False, host="0.0.0.0", port=5001)

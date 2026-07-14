@@ -169,7 +169,7 @@ The following test scenarios are built into our validation frameworks:
 Use this outline for your internship slides or presentation:
 
 1. **Problem Statement**: Standard resource allocation is slow, biased, and does not match skills semantically. TalentBeacon solves this by using NLP to read requirements and ML scoring to find candidates.
-2. **Dataset Description**: Cleaned corporate registry of 4,998 records including IDs, Departments, Job Titles, Years of Experience, Education Levels, Performance Ratings, Certifications, and Skills.
+2. **Dataset Description**: Uploaded employee registry including IDs, Departments, Job Titles, Years of Experience, Education Levels, Performance Ratings, Certifications, and Skills. The record count depends on the file uploaded by Admin/HR.
 3. **Data Preprocessing**: Pipeline handles character encoding glitches, standardizes labels (e.g., lowercase skill tokens), and scales metrics for multi-attribute matching.
 4. **NLP & ML Pipeline**: Details TF-IDF representation, Cosine Similarity matching, and hybrid scoring metrics.
 5. **UI & Dashboard Demonstration**: Show the 6 pages, highlight file uploads, explainability cards, and individual employee radar charts.

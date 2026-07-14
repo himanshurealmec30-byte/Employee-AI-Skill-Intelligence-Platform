@@ -134,18 +134,18 @@ except ImportError as e:
     st.error(f"Could not import custom local modules from `src/`. Error: {e}")
     st.stop()
 
-DEFAULT_CSV_PATH = "employee management system cleaned data output2.csv"
-
-# Load default dataset into session state if not already loaded
+# Load an optional local sample only when it exists. The Flask app's normal
+# workflow is Admin/HR upload from the Employee Files page.
+DEFAULT_CSV_PATH = os.getenv("DEFAULT_CSV_PATH", "sample_employee_dataset.csv")
 if 'active_df' not in st.session_state:
-    if not os.path.exists(DEFAULT_CSV_PATH):
-        st.error(f"Dataset file `{DEFAULT_CSV_PATH}` not found in the root workspace folder.")
-        st.stop()
-    try:
-        st.session_state['active_df'] = preprocess_data(DEFAULT_CSV_PATH)
-    except Exception as e:
-        st.error(f"Failed to load dataset: {e}")
-        st.stop()
+    if os.path.exists(DEFAULT_CSV_PATH):
+        try:
+            st.session_state['active_df'] = preprocess_data(DEFAULT_CSV_PATH)
+        except Exception as e:
+            st.error(f"Failed to load dataset: {e}")
+            st.stop()
+    else:
+        st.session_state['active_df'] = pd.DataFrame()
 
 # Sidebar Navigation using streamlit-option-menu
 with st.sidebar:

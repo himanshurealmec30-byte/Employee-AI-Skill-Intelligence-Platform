@@ -8,11 +8,43 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(100) NOT NULL UNIQUE,
     email VARCHAR(255) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
-    role ENUM('admin', 'manager', 'employee') NOT NULL DEFAULT 'employee',
+    role VARCHAR(30) NOT NULL DEFAULT 'employee',
     employee_id INT NULL,
+    company_email VARCHAR(255) NULL,
+    employee_login_id VARCHAR(50) NULL,
+    first_login BOOLEAN DEFAULT FALSE,
+    temp_password_used BOOLEAN DEFAULT FALSE,
+    temp_password_expires_at VARCHAR(40) NULL,
+    failed_attempts INT DEFAULT 0,
+    locked_until VARCHAR(40) NULL,
+    otp_hash VARCHAR(255) NULL,
+    otp_expires_at VARCHAR(40) NULL,
+    otp_used BOOLEAN DEFAULT FALSE,
+    otp_purpose VARCHAR(40) NULL,
+    source_dataset_id VARCHAR(100) NULL,
+    source_employee_code VARCHAR(255) NULL,
+    source_employee_key VARCHAR(255) NULL,
+    source_file_hash VARCHAR(255) NULL,
+    source_email VARCHAR(255) NULL,
+    created_by INT NULL,
+    created_from_upload BOOLEAN DEFAULT FALSE,
+    created_from_demo BOOLEAN DEFAULT FALSE,
+    name_from_file BOOLEAN DEFAULT FALSE,
+    account_created BOOLEAN DEFAULT FALSE,
+    account_status VARCHAR(40) NULL,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    action VARCHAR(120) NOT NULL,
+    actor_id INT NULL,
+    target_id INT NULL,
+    status VARCHAR(40) DEFAULT 'ok',
+    details_json JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Employees
@@ -221,6 +253,14 @@ CREATE INDEX idx_emp_dept ON employees(department);
 CREATE INDEX idx_emp_designation ON employees(designation);
 CREATE INDEX idx_emp_email ON employees(email);
 CREATE INDEX idx_emp_dataset_upload ON employees(dataset_upload_id);
+CREATE INDEX idx_users_company_email ON users(company_email);
+CREATE INDEX idx_users_source_dataset ON users(source_dataset_id);
+CREATE INDEX idx_users_created_by ON users(created_by);
+CREATE INDEX idx_users_employee_login_id ON users(employee_login_id);
+CREATE INDEX idx_users_source_employee_key ON users(source_employee_key);
+CREATE INDEX idx_audit_action ON audit_logs(action);
+CREATE INDEX idx_audit_actor ON audit_logs(actor_id);
+CREATE INDEX idx_audit_target ON audit_logs(target_id);
 CREATE INDEX idx_skill_category ON skills(category);
 CREATE INDEX idx_role_name ON roles(name);
 CREATE INDEX idx_jd_match_score ON jd_candidate_matches(jd_upload_id, match_score);

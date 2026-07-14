@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+.env
+.env.*
+!.env.example
+
+*.log
+*.sql
+talentbeacon_backup.sql
+
+workspace_data/
+uploads/
+models/*.pkl
+models/*.joblib

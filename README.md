@@ -26,10 +26,12 @@ pip install -r requirements.txt
 ### 2. Configure MySQL
 Edit `config.py` if needed (default: `root` / `password`, database: `database`).
 
-### 3. Initialize database & seed 4,998 employees
+### 3. Initialize database
 ```bash
 python database/seed.py
 ```
+
+This creates the schema, default roles, learning resources, and demo users. Employee data is uploaded from the **Employee Files** page using your own CSV/Excel file.
 
 ### 4. Train ML & NLP models
 ```bash
@@ -160,7 +162,7 @@ TalentBeacon/
 ├── app.py                    # Streamlit dashboard (optional)
 ├── database/
 │   ├── init_db.py            # Schema creation
-│   ├── seed.py               # CSV → MySQL seeding
+│   ├── seed.py               # Schema helpers, roles, resources, demo users
 │   └── schema.sql            # SQL reference
 ├── models/                   # Trained model artifacts
 ├── src/
@@ -172,7 +174,7 @@ TalentBeacon/
 │   └── dashboard/            # Streamlit pages
 ├── templates/                # Bootstrap HTML pages
 ├── static/                   # CSS & JS
-└── employee management system cleaned data output2.csv
+└── uploads/                  # Runtime upload storage
 ```
 
 ---
@@ -195,5 +197,9 @@ TalentBeacon/
 ## Team Notes
 
 - Re-run `python train_models.py` after uploading new employee data
-- Re-run `python database/seed.py` to reset MySQL (drops & recreates DB)
+- Use **Employee Files** to upload or replace workforce datasets
 - ML training logs are stored in `ml_training_logs` table when DB is available
+
+## Professional Planning Docs
+
+- Full requirement, architecture, security, testing, deployment, and future-scope checklist: `docs/development_workflow.md`

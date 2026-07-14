@@ -72,7 +72,7 @@ def preprocess_data(file_path):
 if __name__ == '__main__':
     # Test the preprocessor
     import os
-    file_path = r"c:\Users\Himanshu\Desktop\CProjectsTalentBeacon\employee management system cleaned data output2.csv"
+    file_path = os.environ.get("DEFAULT_CSV_PATH", "sample_employee_dataset.csv")
     if os.path.exists(file_path):
         df = preprocess_data(file_path)
         print("Data preprocessed successfully!")

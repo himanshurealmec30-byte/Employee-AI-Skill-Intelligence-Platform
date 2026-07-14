@@ -93,9 +93,13 @@
         <div class="panel-card">
             <h5>Quick Actions</h5>
             <div class="d-grid gap-2">
-                {% if user.role in ['admin', 'manager'] %}
+                {% if user.role in ['admin', 'hr', 'manager'] %}
                 <a href="{{ url_for('recommendations') }}" class="btn btn-outline-primary">Employee Matching</a>
+                {% endif %}
+                {% if user.role in ['admin', 'manager'] %}
                 <a href="{{ url_for('projects_page') }}" class="btn btn-outline-primary">Project Matching</a>
+                {% endif %}
+                {% if user.role in ['admin', 'hr', 'manager'] %}
                 <a href="{{ url_for('search_page') }}" class="btn btn-outline-primary">Talent Search</a>
                 {% endif %}
                 <a href="{{ url_for('career_page') }}" class="btn btn-outline-primary">Career Paths</a>

@@ -124,8 +124,9 @@ class EmployeeRecommender:
 
 if __name__ == '__main__':
     # Test recommender
+    import os
     from preprocessing import preprocess_data
-    file_path = r"c:\Users\Himanshu\Desktop\CProjectsTalentBeacon\employee management system cleaned data output2.csv"
+    file_path = os.environ.get("DEFAULT_CSV_PATH", "sample_employee_dataset.csv")
     if os.path.exists(file_path):
         df = preprocess_data(file_path)
         recommender = EmployeeRecommender(df)

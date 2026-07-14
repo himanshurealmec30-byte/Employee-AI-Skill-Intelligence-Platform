@@ -55,10 +55,10 @@ cd "C:\Users\Himanshu\Desktop\CProjectsTalentBeacon"
 python -c "from src.services.workspace_service import load_active_employee_df; df=load_active_employee_df(user_id=1); print(len(df)); print(df.iloc[0].get('Source') if len(df) else 'empty')"
 ```
 
-Expected output after sync:
+Example output after syncing an uploaded employee file:
 
 ```text
-4998
+<row count from your uploaded file>
 mysql
 ```
 

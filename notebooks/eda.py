@@ -82,6 +82,6 @@ def run_eda(csv_path, output_dir):
     print(f"All EDA visualizations successfully saved in: {output_dir}")
 
 if __name__ == '__main__':
-    csv_path = r"c:\Users\Himanshu\Desktop\CProjectsTalentBeacon\employee management system cleaned data output2.csv"
+    csv_path = os.environ.get("DEFAULT_CSV_PATH", "sample_employee_dataset.csv")
     output_dir = r"c:\Users\Himanshu\Desktop\CProjectsTalentBeacon\notebooks\plots"
     run_eda(csv_path, output_dir)
