@@ -1638,11 +1638,17 @@ def _managed_users_for_actor(actor_id):
     users = _load_registered_users_from_mysql()
     if not users:
         users = _load_registered_users_from_json()
-    owned_users = [
+    active_dataset_users = [
         user for user in users
-        if str(user.get("created_by")) == str(actor_id) and user.get("created_from_upload")
+        if user.get("created_from_upload")
         and str(user.get("source_dataset_id") or "") == str(active_dataset_id)
     ]
+    owned_users = [
+        user for user in active_dataset_users
+        if str(user.get("created_by")) == str(actor_id)
+    ]
+    if not owned_users:
+        owned_users = active_dataset_users
     owned_users.sort(key=lambda user: (_employee_number_sort_key(user.get("employee_id")), str(user.get("created_at") or "")))
     return owned_users
 

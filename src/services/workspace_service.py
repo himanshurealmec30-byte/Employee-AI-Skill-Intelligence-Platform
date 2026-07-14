@@ -418,6 +418,26 @@ def get_active_dataset(user_id=None):
     for dataset in _user_datasets(state, user_id):
         if dataset["id"] == active_id:
             return dataset
+    if getattr(config, "MYSQL_READS_ENABLED", False):
+        try:
+            from src.db.repository import get_active_dataset_upload
+
+            active = get_active_dataset_upload(uploaded_by=user_id)
+            if active:
+                return {
+                    "id": str(active.get("id")),
+                    "mysql_upload_id": active.get("id"),
+                    "filename": active.get("filename"),
+                    "stored_filename": active.get("stored_filename"),
+                    "file_path": active.get("file_path"),
+                    "file_type": active.get("file_type"),
+                    "row_count": int(active.get("row_count") or 0),
+                    "uploaded_by": active.get("uploaded_by"),
+                    "is_active": bool(active.get("is_active")),
+                    "uploaded_at": str(active.get("uploaded_at") or ""),
+                }
+        except Exception:
+            pass
     return None
 
 
@@ -504,6 +524,20 @@ def delete_dataset(upload_id, user_id=None):
 def dashboard_upload_summary(user_id=None):
     state = _prune_missing_datasets(_load_state())
     active = get_active_dataset(user_id=user_id)
+    user_datasets = _user_datasets(state, user_id)
+    if not user_datasets and getattr(config, "MYSQL_READS_ENABLED", False):
+        try:
+            from src.db.repository import get_dataset_uploads
+
+            user_datasets = [
+                dataset for dataset in get_dataset_uploads(limit=100)
+                if user_id is None
+                or dataset.get("uploaded_by") == user_id
+                or dataset.get("uploaded_by") is None
+                or (active and dataset.get("id") == active.get("mysql_upload_id"))
+            ]
+        except Exception:
+            user_datasets = []
     best = 0
     user_prefix = f"{_owner_key(user_id)}:" if user_id is not None else None
     for key, rows in state.get("matches", {}).items():
@@ -514,13 +548,13 @@ def dashboard_upload_summary(user_id=None):
     summary = {
         "uploaded_candidates": active["row_count"] if active else 0,
         "active_row_count": active["row_count"] if active else 0,
-        "uploaded_datasets": len(_user_datasets(state, user_id)),
+        "uploaded_datasets": len(user_datasets),
         "uploaded_jds": 0,
         "best_match_score": round(best, 1),
         "active_dataset": active["filename"] if active else None,
         "active_dataset_id": active["id"] if active else None,
     }
-    return summary, list_dataset_uploads(limit=5, user_id=user_id), []
+    return summary, user_datasets[:5], []
 
 
 def list_projects(user_id=None):

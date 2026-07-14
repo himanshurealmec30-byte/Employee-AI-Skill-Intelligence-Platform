@@ -24,15 +24,11 @@ def get_all_employees():
 
 def get_active_dataset_employees(uploaded_by=None):
     """Return employees that belong to the active uploaded dataset."""
-    params = []
-    owner_filter = ""
-    if uploaded_by is None:
-        owner_filter = "AND du.uploaded_by IS NULL"
-    else:
-        owner_filter = "AND du.uploaded_by = %s"
-        params.append(uploaded_by)
+    active = get_active_dataset_upload(uploaded_by=uploaded_by)
+    if not active:
+        return []
     return execute_query(
-        f"""
+        """
         SELECT e.id, e.employee_code, e.name, e.email, e.department, e.designation,
                e.years_of_experience, e.education_level, e.performance_score,
                e.projects_handled, e.satisfaction_score, e.dataset_upload_id,
@@ -40,16 +36,16 @@ def get_active_dataset_employees(uploaded_by=None):
                GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR ';') AS skills,
                GROUP_CONCAT(DISTINCT c.name ORDER BY c.name SEPARATOR ';') AS certifications
         FROM employees e
-        JOIN dataset_uploads du ON e.dataset_upload_id = du.id AND du.is_active = TRUE
-        {owner_filter}
+        JOIN dataset_uploads du ON e.dataset_upload_id = du.id
         LEFT JOIN employee_skills es ON e.id = es.employee_id
         LEFT JOIN skills s ON es.skill_id = s.id
         LEFT JOIN employee_certifications ec ON e.id = ec.employee_id
         LEFT JOIN certifications c ON ec.certification_id = c.id
+        WHERE e.dataset_upload_id = %s
         GROUP BY e.id, du.filename
         ORDER BY e.id
         """,
-        tuple(params),
+        (active["id"],),
     )
 
 
@@ -607,22 +603,36 @@ def get_dataset_upload(upload_id):
 
 
 def get_active_dataset_upload(uploaded_by=None):
-    params = []
-    owner_filter = ""
+    def find_one(owner_filter="", params=()):
+        return execute_query(
+            f"""
+            SELECT * FROM dataset_uploads
+            WHERE is_active = TRUE
+            {owner_filter}
+            ORDER BY uploaded_at DESC
+            LIMIT 1
+            """,
+            tuple(params),
+            fetch_one=True,
+        )
+
     if uploaded_by is None:
-        owner_filter = "AND uploaded_by IS NULL"
+        active = find_one("AND uploaded_by IS NULL")
     else:
-        owner_filter = "AND uploaded_by = %s"
-        params.append(uploaded_by)
+        active = find_one("AND uploaded_by = %s", (uploaded_by,))
+        if not active:
+            active = find_one("AND uploaded_by IS NULL")
+    if active:
+        return active
+    active = find_one()
+    if active:
+        return active
     return execute_query(
-        f"""
+        """
         SELECT * FROM dataset_uploads
-        WHERE is_active = TRUE
-        {owner_filter}
         ORDER BY uploaded_at DESC
         LIMIT 1
         """,
-        tuple(params),
         fetch_one=True,
     )
 
