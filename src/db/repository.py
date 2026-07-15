@@ -752,79 +752,180 @@ def upsert_employee_from_upload(candidate, dataset_upload_id):
 
 def upsert_employees_from_upload(candidates, dataset_upload_id):
     """Insert/update uploaded employees in one transaction for much faster uploads."""
+    def chunks(values, size=500):
+        values = list(values)
+        for index in range(0, len(values), size):
+            yield values[index:index + size]
+
+    def normalized_key(value):
+        return str(value or "").strip().lower()
+
+    if not candidates:
+        return 0
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
-            for candidate in candidates:
-                employee_code = candidate["employee_code"]
-                cursor.execute(
-                    """
-                    INSERT INTO employees (
-                        employee_code, name, email, department, designation,
-                        years_of_experience, education_level, performance_score,
-                        projects_handled, satisfaction_score, dataset_upload_id
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE
-                        name = VALUES(name),
-                        email = VALUES(email),
-                        department = VALUES(department),
-                        designation = VALUES(designation),
-                        years_of_experience = VALUES(years_of_experience),
-                        education_level = VALUES(education_level),
-                        performance_score = VALUES(performance_score),
-                        projects_handled = VALUES(projects_handled),
-                        satisfaction_score = VALUES(satisfaction_score),
-                        dataset_upload_id = VALUES(dataset_upload_id)
-                    """,
-                    (
-                        employee_code,
-                        candidate.get("name"),
-                        candidate.get("email"),
-                        candidate.get("department", "Uploaded"),
-                        candidate.get("designation", "Employee"),
-                        candidate.get("years_of_experience", 0),
-                        candidate.get("education_level", "Unknown"),
-                        candidate.get("performance_score", 3),
-                        candidate.get("projects_handled", 0),
-                        candidate.get("satisfaction_score", 3.0),
-                        dataset_upload_id,
-                    ),
+            employee_rows = [
+                (
+                    candidate["employee_code"],
+                    candidate.get("name"),
+                    candidate.get("email"),
+                    candidate.get("department", "Uploaded"),
+                    candidate.get("designation", "Employee"),
+                    candidate.get("years_of_experience", 0),
+                    candidate.get("education_level", "Unknown"),
+                    candidate.get("performance_score", 3),
+                    candidate.get("projects_handled", 0),
+                    candidate.get("satisfaction_score", 3.0),
+                    dataset_upload_id,
                 )
-                cursor.execute("SELECT id FROM employees WHERE employee_code = %s", (employee_code,))
-                employee_id = cursor.fetchone()["id"]
+                for candidate in candidates
+            ]
+            cursor.executemany(
+                """
+                INSERT INTO employees (
+                    employee_code, name, email, department, designation,
+                    years_of_experience, education_level, performance_score,
+                    projects_handled, satisfaction_score, dataset_upload_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    name = VALUES(name),
+                    email = VALUES(email),
+                    department = VALUES(department),
+                    designation = VALUES(designation),
+                    years_of_experience = VALUES(years_of_experience),
+                    education_level = VALUES(education_level),
+                    performance_score = VALUES(performance_score),
+                    projects_handled = VALUES(projects_handled),
+                    satisfaction_score = VALUES(satisfaction_score),
+                    dataset_upload_id = VALUES(dataset_upload_id)
+                """,
+                employee_rows,
+            )
 
-                cursor.execute("DELETE FROM employee_skills WHERE employee_id = %s", (employee_id,))
+            employee_codes = [candidate["employee_code"] for candidate in candidates]
+            employee_id_by_code = {}
+            for code_chunk in chunks(employee_codes):
+                placeholders = ",".join(["%s"] * len(code_chunk))
+                cursor.execute(
+                    f"SELECT id, employee_code FROM employees WHERE employee_code IN ({placeholders})",
+                    tuple(code_chunk),
+                )
+                for row in cursor.fetchall():
+                    employee_id_by_code[row["employee_code"]] = row["id"]
+
+            skill_names = sorted({
+                str(skill or "").strip()
+                for candidate in candidates
+                for skill in candidate.get("skills", [])
+                if str(skill or "").strip()
+            }, key=str.lower)
+            cert_names = sorted({
+                str(cert or "").strip()
+                for candidate in candidates
+                for cert in candidate.get("certifications", [])
+                if str(cert or "").strip()
+            }, key=str.lower)
+
+            skill_id_by_key = {}
+            if skill_names:
+                for name_chunk in chunks(skill_names):
+                    placeholders = ",".join(["%s"] * len(name_chunk))
+                    cursor.execute(
+                        f"SELECT id, name FROM skills WHERE LOWER(name) IN ({placeholders})",
+                        tuple(normalized_key(name) for name in name_chunk),
+                    )
+                    for row in cursor.fetchall():
+                        skill_id_by_key[normalized_key(row["name"])] = row["id"]
+                missing_skills = [
+                    (name, "technical")
+                    for name in skill_names
+                    if normalized_key(name) not in skill_id_by_key
+                ]
+                if missing_skills:
+                    cursor.executemany(
+                        "INSERT IGNORE INTO skills (name, category) VALUES (%s, %s)",
+                        missing_skills,
+                    )
+                    for name_chunk in chunks(skill_names):
+                        placeholders = ",".join(["%s"] * len(name_chunk))
+                        cursor.execute(
+                            f"SELECT id, name FROM skills WHERE LOWER(name) IN ({placeholders})",
+                            tuple(normalized_key(name) for name in name_chunk),
+                        )
+                        for row in cursor.fetchall():
+                            skill_id_by_key[normalized_key(row["name"])] = row["id"]
+
+            cert_id_by_key = {}
+            if cert_names:
+                for name_chunk in chunks(cert_names):
+                    placeholders = ",".join(["%s"] * len(name_chunk))
+                    cursor.execute(
+                        f"SELECT id, name FROM certifications WHERE LOWER(name) IN ({placeholders})",
+                        tuple(normalized_key(name) for name in name_chunk),
+                    )
+                    for row in cursor.fetchall():
+                        cert_id_by_key[normalized_key(row["name"])] = row["id"]
+                missing_certs = [
+                    (name,)
+                    for name in cert_names
+                    if normalized_key(name) not in cert_id_by_key
+                ]
+                if missing_certs:
+                    cursor.executemany(
+                        "INSERT IGNORE INTO certifications (name) VALUES (%s)",
+                        missing_certs,
+                    )
+                    for name_chunk in chunks(cert_names):
+                        placeholders = ",".join(["%s"] * len(name_chunk))
+                        cursor.execute(
+                            f"SELECT id, name FROM certifications WHERE LOWER(name) IN ({placeholders})",
+                            tuple(normalized_key(name) for name in name_chunk),
+                        )
+                        for row in cursor.fetchall():
+                            cert_id_by_key[normalized_key(row["name"])] = row["id"]
+
+            employee_ids = list(employee_id_by_code.values())
+            for id_chunk in chunks(employee_ids):
+                placeholders = ",".join(["%s"] * len(id_chunk))
+                cursor.execute(f"DELETE FROM employee_skills WHERE employee_id IN ({placeholders})", tuple(id_chunk))
+                cursor.execute(f"DELETE FROM employee_certifications WHERE employee_id IN ({placeholders})", tuple(id_chunk))
+
+            skill_links = []
+            cert_links = []
+            seen_skill_links = set()
+            seen_cert_links = set()
+            for candidate in candidates:
+                employee_id = employee_id_by_code.get(candidate["employee_code"])
+                if not employee_id:
+                    continue
                 for skill in candidate.get("skills", []):
-                    cursor.execute("SELECT id FROM skills WHERE LOWER(name) = LOWER(%s)", (skill,))
-                    row = cursor.fetchone()
-                    if row:
-                        skill_id = row["id"]
-                    else:
-                        cursor.execute("INSERT INTO skills (name, category) VALUES (%s, 'technical')", (skill,))
-                        skill_id = cursor.lastrowid
-                    cursor.execute(
-                        """
-                        INSERT IGNORE INTO employee_skills (employee_id, skill_id, proficiency_level)
-                        VALUES (%s, %s, 'intermediate')
-                        """,
-                        (employee_id, skill_id),
-                    )
-
-                cursor.execute("DELETE FROM employee_certifications WHERE employee_id = %s", (employee_id,))
+                    skill_id = skill_id_by_key.get(normalized_key(skill))
+                    key = (employee_id, skill_id)
+                    if skill_id and key not in seen_skill_links:
+                        seen_skill_links.add(key)
+                        skill_links.append((employee_id, skill_id, "intermediate"))
                 for cert in candidate.get("certifications", []):
-                    cursor.execute("SELECT id FROM certifications WHERE name = %s", (cert,))
-                    row = cursor.fetchone()
-                    if row:
-                        cert_id = row["id"]
-                    else:
-                        cursor.execute("INSERT INTO certifications (name) VALUES (%s)", (cert,))
-                        cert_id = cursor.lastrowid
-                    cursor.execute(
-                        """
-                        INSERT IGNORE INTO employee_certifications (employee_id, certification_id)
-                        VALUES (%s, %s)
-                        """,
-                        (employee_id, cert_id),
-                    )
+                    cert_id = cert_id_by_key.get(normalized_key(cert))
+                    key = (employee_id, cert_id)
+                    if cert_id and key not in seen_cert_links:
+                        seen_cert_links.add(key)
+                        cert_links.append((employee_id, cert_id))
+            if skill_links:
+                cursor.executemany(
+                    """
+                    INSERT IGNORE INTO employee_skills (employee_id, skill_id, proficiency_level)
+                    VALUES (%s, %s, %s)
+                    """,
+                    skill_links,
+                )
+            if cert_links:
+                cursor.executemany(
+                    """
+                    INSERT IGNORE INTO employee_certifications (employee_id, certification_id)
+                    VALUES (%s, %s)
+                    """,
+                    cert_links,
+                )
             return len(candidates)
 
 

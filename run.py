@@ -146,15 +146,13 @@ def create_app():
                 flash(limited, "danger")
                 return render_template("login.html"), 429
             username = request.form.get("username", "").strip()
-            password = request.form.get("password", "")
+            password = request.form.get("password", "").strip()
             user, error = _authenticate_user(username, password)
             if user:
                 if user.get("first_login"):
                     if user.get("temp_password_used"):
                         flash("Temporary password already used. Please reset your password.", "danger")
                         return redirect(url_for("forgot_password_page"))
-                    user["temp_password_used"] = True
-                    _save_registered_user(user)
                     demo_otp = _issue_otp(user, "first_login")
                     session["first_login_user_id"] = user["id"]
                     session["first_login_demo_otp"] = demo_otp

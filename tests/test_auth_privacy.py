@@ -411,6 +411,31 @@ class EmployeePrivacyTests(unittest.TestCase):
         self.assertNotEqual(user["temp_password_expires_at"], "2026-01-01T00:00:00+00:00")
         save_user.assert_called_once()
 
+    def test_first_login_temp_password_is_not_consumed_before_password_change(self):
+        user = {
+            "id": 7002,
+            "username": "Employee Pending",
+            "role": "employee",
+            "employee_id": "TB7002",
+            "password_hash": generate_password_hash("TempPass123!"),
+            "first_login": True,
+            "temp_password_used": False,
+            "temp_password_expires_at": "2099-01-01T00:00:00+00:00",
+            "failed_attempts": 0,
+            "locked_until": None,
+        }
+        with patch("run._get_registered_user", return_value=user), \
+             patch("run._rate_limit", return_value=None), \
+             patch("run._issue_otp", return_value="123456"), \
+             patch("run._save_registered_user"):
+            response = self.client.post(
+                "/login",
+                data={"username": "Employee Pending", "password": "TempPass123!"},
+            )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/first-login")
+        self.assertFalse(user["temp_password_used"])
+
 
 if __name__ == "__main__":
     unittest.main()
