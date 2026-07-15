@@ -238,6 +238,27 @@ class SkillNormalizationTests(unittest.TestCase):
         self.assertEqual(int(row.iloc[0]["Display_Employee_ID"]), 1535)
         self.assertEqual(int(row.iloc[0]["Employee_ID"]), 603)
 
+    def test_hidden_database_id_is_not_treated_as_uploaded_employee_id(self):
+        service = TalentBeaconService()
+        service.df = pd.DataFrame([
+            {
+                "Employee_ID": 55,
+                "Display_Employee_ID": 5,
+                "Department": "Operations",
+                "Job_Title": "Technician",
+                "Education_Level": "Bachelor",
+                "Performance_Score": 4,
+                "Years_of_Experience": 9,
+                "Parsed_Skills": ["AWS", "Docker"],
+                "Parsed_Certifications": [],
+                "Skills": "AWS;Docker",
+            }
+        ])
+        self.assertTrue(service._find_employee_row(55).empty)
+        row = service._find_employee_row(5)
+        self.assertFalse(row.empty)
+        self.assertEqual(int(row.iloc[0]["Display_Employee_ID"]), 5)
+
     def test_analytics_includes_distribution_rows(self):
         service = TalentBeaconService()
         service.df = pd.DataFrame([

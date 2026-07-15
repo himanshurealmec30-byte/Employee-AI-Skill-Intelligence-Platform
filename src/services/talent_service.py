@@ -332,6 +332,8 @@ class TalentBeaconService:
             row = self.df[self.df["Display_Employee_ID"] == employee_id]
             if not row.empty:
                 return row
+            if pd.to_numeric(self.df["Display_Employee_ID"], errors="coerce").notna().any():
+                return self.df.iloc[0:0]
         row = self.df[self.df["Employee_ID"] == employee_id]
         if not row.empty:
             return row

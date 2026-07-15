@@ -367,7 +367,7 @@ def create_app():
     @login_required
     @role_required("admin", "hr")
     def analytics_export_excel():
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
         analytics = svc.get_analytics() if svc else {}
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -394,7 +394,7 @@ def create_app():
         from matplotlib.backends.backend_pdf import PdfPages
         from matplotlib.figure import Figure
 
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
         analytics = svc.get_analytics() if svc else {}
         output = BytesIO()
         with PdfPages(output) as pdf:
@@ -593,7 +593,7 @@ def create_app():
 
     @app.route("/manager/jd-matching", methods=["GET", "POST"])
     @login_required
-    @role_required("admin", "manager")
+    @role_required("admin", "hr", "manager")
     def jd_matching_page():
         if request.method == "POST" and request.files.get("jd_pdf"):
             upload = request.files.get("jd_pdf")
@@ -622,7 +622,7 @@ def create_app():
 
     @app.route("/manager/projects", methods=["GET", "POST"])
     @login_required
-    @role_required("admin", "manager")
+    @role_required("admin", "hr", "manager")
     def projects_page():
         if request.method == "POST":
             try:
@@ -762,7 +762,7 @@ def create_app():
 
     @app.route("/api/match/role/<role_name>")
     @login_required
-    @role_required("admin", "manager")
+    @role_required("admin", "hr", "manager")
     def api_match_role(role_name):
         svc = _get_talent_service(app)
         if not svc:
@@ -773,7 +773,7 @@ def create_app():
 
     @app.route("/api/match/project", methods=["POST"])
     @login_required
-    @role_required("admin", "manager")
+    @role_required("admin", "hr", "manager")
     def api_match_project():
         svc = _get_talent_service(app)
         if not svc:
@@ -809,7 +809,9 @@ def create_app():
     def api_skill_gap(employee_id, role_name):
         if not _can_access_employee_record(employee_id):
             return jsonify({"error": "Unauthorized"}), 403
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
+        if not svc:
+            return jsonify({"error": "Upload and activate an employee file first."}), 400
         gap = svc.get_skill_gap(employee_id, role_name.replace("-", " "))
         return jsonify(gap or {"error": "Not found"})
 
@@ -818,7 +820,9 @@ def create_app():
     def api_readiness(employee_id, role_name):
         if not _can_access_employee_record(employee_id):
             return jsonify({"error": "Unauthorized"}), 403
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
+        if not svc:
+            return jsonify({"error": "Upload and activate an employee file first."}), 400
         result = svc.get_readiness_score(employee_id, role_name.replace("-", " "))
         return jsonify(result or {"error": "Not found"})
 
@@ -827,7 +831,9 @@ def create_app():
     def api_career(employee_id):
         if not _can_access_employee_record(employee_id):
             return jsonify({"error": "Unauthorized"}), 403
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
+        if not svc:
+            return jsonify({"error": "Upload and activate an employee file first."}), 400
         paths = svc.get_career_paths(employee_id)
         return jsonify({"career_paths": paths})
 
@@ -868,7 +874,9 @@ def create_app():
             return jsonify({"error": "Unauthorized"}), 403
         if role not in {"admin", "hr", "manager", "employee"}:
             return jsonify({"error": "Unauthorized"}), 403
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
+        if not svc:
+            return jsonify({"error": "Upload and activate an employee file first."}), 400
         role_name = request.args.get("role_name")
         project_id = request.args.get("project_id")
         project = project_detail(project_id, user_id=_current_user_id()) if project_id else None
@@ -1026,24 +1034,39 @@ def _active_dataset_id_for_actor(actor_id):
         return None
 
 
+def _active_service_key(actor_id):
+    return (
+        str(actor_id),
+        str(_active_dataset_id_for_actor(actor_id) or ""),
+        str(_active_dataset_hash_for_actor(actor_id) or ""),
+    )
+
+
 def _refresh_talent_service(app):
     user_id = _current_data_owner_id()
     user_key = str(user_id)
     services = app.config.setdefault("services_by_user", {})
+    service_keys = app.config.setdefault("service_keys_by_user", {})
     try:
         services[user_key] = reload_service(user_id)
+        service_keys[user_key] = _active_service_key(user_id)
         app.config["service"] = services[user_key]
     except Exception:
         services.pop(user_key, None)
+        service_keys.pop(user_key, None)
         app.config.pop("service", None)
 
 
 def _get_talent_service(app):
-    svc = app.config.get("service")
+    user_id = _current_data_owner_id()
+    user_key = str(user_id)
+    services = app.config.setdefault("services_by_user", {})
+    service_keys = app.config.setdefault("service_keys_by_user", {})
+    svc = services.get(user_key) or app.config.get("service")
     df = getattr(svc, "df", None)
-    if svc is None or getattr(df, "empty", True):
+    if svc is None or getattr(df, "empty", True) or service_keys.get(user_key) != _active_service_key(user_id):
         _refresh_talent_service(app)
-        svc = app.config.get("service")
+        svc = app.config.setdefault("services_by_user", {}).get(user_key) or app.config.get("service")
     return svc
 
 
