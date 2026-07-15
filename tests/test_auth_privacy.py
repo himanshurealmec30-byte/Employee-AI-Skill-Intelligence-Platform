@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pandas as pd
 from werkzeug.security import generate_password_hash
 
-from run import create_app, _authenticate_user, _create_accounts_from_active_dataset
+from run import create_app, _authenticate_user, _create_accounts_from_active_dataset, _managed_users_for_actor
 
 
 class EmployeePrivacyTests(unittest.TestCase):
@@ -385,6 +385,41 @@ class EmployeePrivacyTests(unittest.TestCase):
         self.assertEqual(users[0]["source_name"], "Ananya Sharma")
         self.assertEqual(users[0]["username"], "ananya.sharma.tb1")
         self.assertEqual(users[0]["company_email"], "ananya.sharma.tb1@talentbeacon.local")
+
+    def test_managed_users_page_repairs_generic_email_when_name_is_available(self):
+        users = [{
+            "id": 5102,
+            "employee_id": "TB1",
+            "username": "employee.tb1",
+            "email": "employee.1.tb1@talentbeacon.local",
+            "company_email": "employee.1.tb1@talentbeacon.local",
+            "password_hash": generate_password_hash("TempPass123!"),
+            "role": "employee",
+            "first_login": True,
+            "created_by": 10,
+            "created_from_upload": True,
+            "source_dataset_id": "active-dataset",
+            "source_employee_code": "active-dataset:1",
+            "source_employee_key": "file:file-hash:row:1",
+            "source_file_hash": "file-hash",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }]
+        df = pd.DataFrame([{
+            "Employee_ID": 999,
+            "Display_Employee_ID": 1,
+            "Employee_Code": "active-dataset:1",
+            "Name": "Ananya Sharma",
+            "Email": "",
+        }])
+        with patch("run._active_dataset_id_for_actor", return_value="active-dataset"), \
+             patch("run._active_dataset_hash_for_actor", return_value="file-hash"), \
+             patch("run.load_active_employee_df", return_value=df), \
+             patch("run._load_registered_users", return_value=users), \
+             patch("run._sync_user_account_to_mysql", return_value=True) as sync_user:
+            managed = _managed_users_for_actor(10)
+        self.assertEqual(managed[0]["source_name"], "Ananya Sharma")
+        self.assertEqual(managed[0]["company_email"], "ananya.sharma.tb1@talentbeacon.local")
+        sync_user.assert_called_once()
 
     def test_different_employee_file_does_not_reuse_same_row_account(self):
         users = [{

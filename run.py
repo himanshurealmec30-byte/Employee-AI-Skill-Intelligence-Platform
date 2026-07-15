@@ -1806,6 +1806,16 @@ def _managed_users_for_actor(actor_id):
             user = dict(user)
             user["source_name"] = display_name
             user["name_from_file"] = True
+            current_email = str(user.get("company_email") or user.get("email") or "").strip().lower()
+            if _is_generic_upload_email(current_email):
+                desired_email = _batch_company_email(display_name, user.get("employee_id"), set())
+                if desired_email and desired_email != current_email:
+                    user["email"] = desired_email
+                    user["company_email"] = desired_email
+                    try:
+                        _sync_user_account_to_mysql(user)
+                    except Exception:
+                        pass
         enriched_users.append(user)
     enriched_users.sort(key=lambda user: (_employee_number_sort_key(user.get("employee_id")), str(user.get("created_at") or "")))
     return enriched_users

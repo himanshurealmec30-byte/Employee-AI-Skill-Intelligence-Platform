@@ -437,6 +437,7 @@ _USER_ACCOUNT_UPSERT_SQL = """
     ) VALUES (%s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
     ON DUPLICATE KEY UPDATE
         username = VALUES(username),
+        email = VALUES(email),
         password_hash = VALUES(password_hash),
         role = VALUES(role),
         company_email = VALUES(company_email),
