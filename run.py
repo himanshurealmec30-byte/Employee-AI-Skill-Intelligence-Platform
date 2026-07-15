@@ -465,10 +465,7 @@ def create_app():
             try:
                 result = process_dataset_upload(upload, uploaded_by=owner_id)
                 _refresh_talent_service(app)
-                account_result = _create_accounts_from_active_dataset(actor_id=owner_id, reset_existing_passwords=True)
-                if account_result["accounts"]:
-                    _store_generated_credentials(owner_id, account_result["accounts"])
-                account_message = f" Created {account_result['created']} employee login accounts. Open Users to view temporary passwords."
+                account_message = " Open Users and click Generate / Show Active File Logins to create employee passwords."
                 if is_ajax:
                     return jsonify({
                         "ok": True,
@@ -508,16 +505,6 @@ def create_app():
             except Exception as exc:
                 flash(str(exc), "danger")
         all_managed_users = _managed_users_for_actor(owner_id)
-        if not all_managed_users and _active_dataset_id_for_actor(owner_id):
-            try:
-                account_result = _create_accounts_from_active_dataset(actor_id=owner_id, reset_existing_passwords=True)
-                if account_result["accounts"]:
-                    generated_accounts = _dedupe_generated_accounts(generated_accounts + account_result["accounts"])
-                    _store_generated_credentials(owner_id, generated_accounts)
-                    flash(f"Prepared {account_result['created']} employee login credentials from the active uploaded file.", "success")
-                    all_managed_users = _managed_users_for_actor(owner_id)
-            except Exception as exc:
-                flash(str(exc), "danger")
         generated_accounts = _dedupe_generated_accounts(generated_accounts)
         if not all_managed_users and generated_accounts:
             all_managed_users = _generated_accounts_as_users(generated_accounts, actor_id=owner_id)
@@ -1732,6 +1719,19 @@ def _managed_users_for_actor(actor_id):
         user for user in users
         if user.get("created_from_upload")
     ]
+    active_employee_ids = set()
+    try:
+        active_df = load_active_employee_df(user_id=actor_id)
+        for _, row in active_df.iterrows():
+            employee_id = _employee_login_id_from_source(
+                row.get("Employee_Code"),
+                row.get("Display_Employee_ID"),
+                row.get("Employee_ID"),
+            )
+            if employee_id:
+                active_employee_ids.add(employee_id.lower())
+    except Exception:
+        active_employee_ids = set()
     active_dataset_users = [
         user for user in upload_users
         if (
@@ -1743,6 +1743,11 @@ def _managed_users_for_actor(actor_id):
             and str(user.get("source_file_hash") or "") == str(active_file_hash)
         )
     ]
+    if not active_dataset_users and active_employee_ids:
+        active_dataset_users = [
+            user for user in upload_users
+            if str(user.get("employee_id") or "").strip().lower() in active_employee_ids
+        ]
     owned_users = [
         user for user in active_dataset_users
         if str(user.get("created_by")) == str(actor_id)
@@ -1845,6 +1850,34 @@ def _employee_number_start(users):
         if match:
             existing.append(int(match.group()))
     return max(existing or [1000]) + 1
+
+
+def _employee_login_id_from_source(*values):
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text.lower() in {"nan", "none"}:
+            continue
+        if ":" in text:
+            text = text.rsplit(":", 1)[-1].strip()
+        if re.match(r"^tb\d+$", text, flags=re.IGNORECASE):
+            return text.upper()
+        match = re.search(r"\d+", text)
+        if match:
+            return f"TB{int(match.group())}"
+    return ""
+
+
+def _next_unique_employee_login_id(preferred, used_ids, next_number):
+    candidate = str(preferred or "").strip().upper()
+    if candidate and candidate.lower() not in used_ids:
+        used_ids.add(candidate.lower())
+        return candidate, next_number
+    while True:
+        candidate = f"TB{next_number}"
+        next_number += 1
+        if candidate.lower() not in used_ids:
+            used_ids.add(candidate.lower())
+            return candidate, next_number
 
 
 def _batch_company_email(name, employee_id, used_emails):
@@ -1986,6 +2019,18 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
         key = _user_employee_identity_key(user)
         if key:
             users_by_source_key[key] = prefer_existing_account(users_by_source_key.get(key), user)
+    users_by_employee_id = {}
+    for user in users:
+        if not user.get("created_from_upload"):
+            continue
+        employee_id_key = str(user.get("employee_id") or "").strip().lower()
+        if employee_id_key:
+            users_by_employee_id[employee_id_key] = prefer_existing_account(users_by_employee_id.get(employee_id_key), user)
+    used_employee_ids = {
+        str(user.get("employee_id") or "").strip().lower()
+        for user in users
+        if user.get("employee_id")
+    }
     next_user_id = _next_registered_user_id(users)
     next_employee_number = _employee_number_start(users)
     created_accounts = []
@@ -2001,6 +2046,11 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
         source_email = str(row.get("Email") or "").strip().lower()
         source_employee_code = str(row.get("Employee_Code") or row.get("Display_Employee_ID") or "").strip()
         source_employee_key = _employee_identity_key(row, active_file_hash)
+        preferred_employee_id = _employee_login_id_from_source(
+            source_employee_code,
+            row.get("Display_Employee_ID"),
+            row.get("Employee_ID"),
+        )
         if not name:
             skipped += 1
             continue
@@ -2010,6 +2060,8 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
             existing_user = users_by_email.get(source_email)
         if existing_user is None and source_employee_key:
             existing_user = users_by_source_key.get(source_employee_key)
+        if existing_user is None and preferred_employee_id:
+            existing_user = users_by_employee_id.get(preferred_employee_id.lower())
 
         if existing_user is not None:
             if existing_user.get("created_from_upload"):
@@ -2032,6 +2084,8 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
                 if existing_user.get("username") != upload_username:
                     existing_user["username"] = upload_username
                     changed = True
+                if existing_user.get("employee_id"):
+                    used_employee_ids.add(str(existing_user.get("employee_id")).strip().lower())
                 if bool(existing_user.get("name_from_file")) != has_file_name:
                     existing_user["name_from_file"] = has_file_name
                     changed = True
@@ -2046,16 +2100,17 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
                 existing_user["temp_password_expires_at"] = _to_iso(_now() + timedelta(hours=TEMP_PASSWORD_HOURS))
                 existing_user["failed_attempts"] = 0
                 existing_user["locked_until"] = None
-                if not _sync_user_account_to_mysql(existing_user) and _requires_mysql_account_persistence():
-                    raise ValueError(f"Could not save refreshed employee password to the database: {existing_user.get('_mysql_sync_error', 'unknown database error')}")
                 reset_accounts.append(_display_generated_account(existing_user, temporary_password, action="reset"))
                 changed = True
             else:
                 skipped += 1
             continue
 
-        employee_id = f"TB{next_employee_number}"
-        next_employee_number += 1
+        employee_id, next_employee_number = _next_unique_employee_login_id(
+            preferred_employee_id,
+            used_employee_ids,
+            next_employee_number,
+        )
         company_email = ""
         if source_email and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", source_email) and source_email not in used_emails:
             company_email = source_email
@@ -2090,17 +2145,15 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
         }
         next_user_id += 1
         users.append(user)
-        if not _sync_user_account_to_mysql(user) and _requires_mysql_account_persistence():
-            raise ValueError(f"Could not save employee login account to the database: {user.get('_mysql_sync_error', 'unknown database error')}")
         used_emails.add(company_email)
         users_by_email[company_email] = user
         if source_employee_key:
             users_by_source_key[source_employee_key] = user
+        users_by_employee_id[employee_id.lower()] = user
         created_accounts.append(_display_generated_account(user, temporary_password))
         changed = True
 
     if changed:
-        _save_registered_users(users)
         changed_uploaded_users = [
             user for user in users
             if str(user.get("created_by")) == str(actor_id)
@@ -2110,7 +2163,14 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
         for user in changed_uploaded_users:
             user["account_created"] = not bool(user.get("first_login"))
             user["account_status"] = "created" if user["account_created"] else "pending_setup"
-        _sync_user_accounts_to_mysql(changed_uploaded_users)
+        if _is_development():
+            _write_registered_users_json(users)
+        if not _sync_user_accounts_to_mysql(changed_uploaded_users) and _requires_mysql_account_persistence():
+            first_error = next(
+                (user.get("_mysql_sync_error") for user in changed_uploaded_users if user.get("_mysql_sync_error")),
+                "unknown database error",
+            )
+            raise ValueError(f"Could not save employee login accounts to the database: {first_error}")
         for account in created_accounts:
             _audit("account_created", actor_id=actor_id, status="ok", details={"role": "employee", "company_email": account["company_email"], "source": "employee_upload"})
         if reset_accounts:

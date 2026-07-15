@@ -154,7 +154,7 @@ if (uploadForm) {
         xhr.onloadend = () => {
             if (window.TalentBeaconLoading) window.TalentBeaconLoading.hide();
         };
-        xhr.timeout = 120000;
+        xhr.timeout = 180000;
         xhr.send(new FormData(uploadForm));
     });
 }

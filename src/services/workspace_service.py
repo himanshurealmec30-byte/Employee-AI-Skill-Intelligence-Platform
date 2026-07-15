@@ -348,6 +348,14 @@ def _sync_dataset_to_mysql(dataset_meta, employee_df, uploaded_by=None):
         return {"error": str(exc)}
 
 
+def _requires_mysql_dataset_persistence():
+    host = str(getattr(config, "MYSQL_HOST", "") or "").strip().lower()
+    return (
+        bool(getattr(config, "IS_PRODUCTION", False))
+        or bool(getattr(config, "MYSQL_READS_REQUESTED", getattr(config, "MYSQL_READS_ENABLED", False)))
+    ) and host not in {"", "localhost", "127.0.0.1", "::1"}
+
+
 def process_dataset_upload(file_storage, uploaded_by=None):
     _ensure_dirs()
     suffix = _validate_dataset(file_storage.filename)
@@ -398,6 +406,9 @@ def process_dataset_upload(file_storage, uploaded_by=None):
     if isinstance(sync_result, int):
         meta["mysql_upload_id"] = sync_result
     elif isinstance(sync_result, dict) and sync_result.get("error"):
+        if _requires_mysql_dataset_persistence():
+            stored_path.unlink(missing_ok=True)
+            raise ValueError(f"Could not save employee file to MySQL: {sync_result['error']}")
         meta["mysql_sync_error"] = sync_result["error"]
     state["datasets"].insert(0, meta)
     state.setdefault("active_dataset_ids", {})[_owner_key(uploaded_by) or "global"] = dataset_id
