@@ -1541,6 +1541,9 @@ def _write_registered_users_json(users):
 
 
 def _sync_user_account_to_mysql(user):
+    if not getattr(config, "MYSQL_CONFIG_VALID", True):
+        user["_mysql_sync_error"] = "MySQL is not configured. Set MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, and MYSQL_DATABASE to the real Railway values."
+        return False
     try:
         from src.db.repository import upsert_user_account
 
@@ -1552,6 +1555,11 @@ def _sync_user_account_to_mysql(user):
 
 
 def _sync_user_accounts_to_mysql(users):
+    if not getattr(config, "MYSQL_CONFIG_VALID", True):
+        message = "MySQL is not configured. Set MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, and MYSQL_DATABASE to the real Railway values."
+        for user in users:
+            user["_mysql_sync_error"] = message
+        return False
     try:
         from src.db.repository import upsert_user_accounts
 
@@ -1565,7 +1573,10 @@ def _sync_user_accounts_to_mysql(users):
 
 def _requires_mysql_account_persistence():
     host = str(getattr(config, "MYSQL_HOST", "") or "").strip().lower()
-    return bool(getattr(config, "MYSQL_READS_ENABLED", False)) and host not in {"", "localhost", "127.0.0.1", "::1"}
+    return (
+        bool(getattr(config, "IS_PRODUCTION", False))
+        or bool(getattr(config, "MYSQL_READS_REQUESTED", getattr(config, "MYSQL_READS_ENABLED", False)))
+    ) and host not in {"", "localhost", "127.0.0.1", "::1"}
 
 
 def _credential_bucket_key(actor_id):

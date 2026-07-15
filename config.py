@@ -6,12 +6,33 @@ APP_ENV = os.getenv("APP_ENV", os.getenv("NODE_ENV", "development")).lower()
 IS_PRODUCTION = APP_ENV in {"production", "prod"}
 
 # MySQL Configuration
-MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost").strip()
 MYSQL_PORT = int(os.getenv("MYSQL_PORT", 3306))
-MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_USER = os.getenv("MYSQL_USER", "root").strip()
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "himanshu12345")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "talentbeacon")
-MYSQL_READS_ENABLED = os.getenv("MYSQL_READS_ENABLED", "1").lower() not in {"0", "false", "no"}
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "talentbeacon").strip()
+
+_MYSQL_PLACEHOLDERS = {
+    "",
+    "your-mysql-host",
+    "your_mysql_host",
+    "your-db-host",
+    "your-railway-host",
+}
+_MYSQL_PASSWORD_PLACEHOLDERS = {
+    "",
+    "your-mysql-password",
+    "your_mysql_password",
+    "paste_your_real_railway_password_here",
+}
+MYSQL_CONFIG_VALID = (
+    MYSQL_HOST.lower() not in _MYSQL_PLACEHOLDERS
+    and MYSQL_USER.lower() not in {"", "your-mysql-user", "your_mysql_user"}
+    and MYSQL_PASSWORD.lower() not in _MYSQL_PASSWORD_PLACEHOLDERS
+    and MYSQL_DATABASE.lower() not in {"", "your-mysql-database", "your_mysql_database"}
+)
+MYSQL_READS_REQUESTED = os.getenv("MYSQL_READS_ENABLED", "1").lower() not in {"0", "false", "no"}
+MYSQL_READS_ENABLED = MYSQL_READS_REQUESTED and MYSQL_CONFIG_VALID
 
 SQLALCHEMY_DATABASE_URI = (
     f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}"
