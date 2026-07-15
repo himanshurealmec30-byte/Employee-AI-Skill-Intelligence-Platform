@@ -12,7 +12,7 @@
     <div>Temporary password: <strong>{{ created_user.temporary_password }}</strong></div>
     <div class="small mt-2">Temporary password expires in 36 hours and is usable only for first login.</div>
     {% if is_demo %}
-    <div class="small mt-2"><strong>Demo Mode:</strong> In production, credentials/OTP will be sent to registered company email.</div>
+    <div class="small mt-2"><strong>Demo Mode:</strong> The OTP will appear on the employee first-login page after they sign in with this temporary password.</div>
     {% endif %}
 </div>
 {% endif %}
@@ -22,7 +22,7 @@
     <strong>{{ generated_accounts|length }} employee login credentials ready from the active file.</strong>
     <div class="small mb-0">Temporary passwords are shown in the Managed Users table. Save them now for onboarding.</div>
     {% if is_demo %}
-    <div class="small mt-2"><strong>Demo Mode:</strong> In production, credentials will be sent to registered company email.</div>
+    <div class="small mt-2"><strong>Demo Mode:</strong> OTP is shown on the employee first-login page after temporary-password login. In production, OTP will be sent to registered company email.</div>
     {% endif %}
 </div>
 {% endif %}

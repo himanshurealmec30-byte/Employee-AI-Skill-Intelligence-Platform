@@ -533,7 +533,7 @@ def create_app():
                 if account.get("temporary_password") and account.get("company_email")
             },
             user=session["user"],
-            is_demo=_is_development(),
+            is_demo=_show_demo_otp(),
         )
 
     @app.route("/admin/users/from-active-dataset", methods=["POST"])
