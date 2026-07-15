@@ -328,13 +328,13 @@ class TalentBeaconService:
         if self.df.empty:
             return self.df
         employee_id = int(employee_id)
-        row = self.df[self.df["Employee_ID"] == employee_id]
-        if not row.empty:
-            return row
         if "Display_Employee_ID" in self.df:
             row = self.df[self.df["Display_Employee_ID"] == employee_id]
             if not row.empty:
                 return row
+        row = self.df[self.df["Employee_ID"] == employee_id]
+        if not row.empty:
+            return row
         if "Employee_Code" in self.df:
             row = self.df[self.df["Employee_Code"].astype(str) == str(employee_id)]
             if not row.empty:

@@ -215,6 +215,29 @@ class SkillNormalizationTests(unittest.TestCase):
             ["Skills", "Experience", "Performance", "Certifications"],
         )
 
+    def test_visible_employee_id_is_used_before_internal_database_id(self):
+        service = TalentBeaconService()
+        service.df = pd.DataFrame([
+            {
+                "Employee_ID": 603,
+                "Display_Employee_ID": 1535,
+                "Department": "HR",
+                "Job_Title": "Developer",
+                "Education_Level": "Bachelor",
+                "Performance_Score": 4,
+                "Years_of_Experience": 5,
+                "Projects_Handled": 2,
+                "Employee_Satisfaction_Score": 4,
+                "Parsed_Skills": ["Python", "SQL"],
+                "Parsed_Certifications": [],
+                "Skills": "Python;SQL",
+            }
+        ])
+        row = service._find_employee_row(1535)
+        self.assertFalse(row.empty)
+        self.assertEqual(int(row.iloc[0]["Display_Employee_ID"]), 1535)
+        self.assertEqual(int(row.iloc[0]["Employee_ID"]), 603)
+
     def test_analytics_includes_distribution_rows(self):
         service = TalentBeaconService()
         service.df = pd.DataFrame([
