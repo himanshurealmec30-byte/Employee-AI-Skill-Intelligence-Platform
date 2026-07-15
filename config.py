@@ -50,6 +50,7 @@ DATASET_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
 CSRF_ENABLED = os.getenv("CSRF_ENABLED", "1" if IS_PRODUCTION else "0").lower() not in {"0", "false", "no"}
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "1").lower() not in {"0", "false", "no"}
+SHOW_DEMO_OTP = os.getenv("SHOW_DEMO_OTP", "1" if not IS_PRODUCTION else "0").lower() not in {"0", "false", "no"}
 
 # ML model paths
 READINESS_MODEL_PATH = MODELS_DIR / "readiness_xgb.pkl"

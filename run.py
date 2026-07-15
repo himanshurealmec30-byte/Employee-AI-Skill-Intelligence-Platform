@@ -217,7 +217,7 @@ def create_app():
             user=user,
             demo_otp=session.get("first_login_demo_otp"),
             otp_expires_at=user.get("otp_expires_at"),
-            is_demo=_is_development(),
+            is_demo=_show_demo_otp(),
         )
 
     @app.route("/first-login/resend-otp", methods=["GET", "POST"])
@@ -257,7 +257,7 @@ def create_app():
                     "forgot_password.html",
                     demo_otp=None,
                     otp_expires_at=None,
-                    is_demo=_is_development(),
+                    is_demo=_show_demo_otp(),
                 ), 429
             identity = request.form.get("identity", "").strip().lower()
             user = _find_password_reset_user(identity)
@@ -270,7 +270,7 @@ def create_app():
             "forgot_password.html",
             demo_otp=demo_otp,
             otp_expires_at=otp_expires_at,
-            is_demo=_is_development(),
+            is_demo=_show_demo_otp(),
         )
 
     @app.route("/reset-password", methods=["POST"])
@@ -1154,6 +1154,10 @@ def _safe_int(value, default=0):
 
 def _is_development():
     return APP_ENV.lower() in {"development", "dev", "local", "demo"}
+
+
+def _show_demo_otp():
+    return bool(getattr(config, "SHOW_DEMO_OTP", _is_development()))
 
 
 def _rate_limit(bucket, limit=10, minutes=15):
@@ -2210,7 +2214,7 @@ def _issue_otp(user, purpose):
     _save_registered_user(user)
     sendOtpEmail(user.get("company_email") or user.get("email"), otp)
     print(f"[TalentBeacon Demo OTP] {otp} for {user.get('company_email') or user.get('email')} ({purpose})")
-    return otp if _is_development() else None
+    return otp if _show_demo_otp() else None
 
 
 def _verify_otp(user, otp, purpose):
