@@ -48,7 +48,7 @@
                 </ul>
                 <span class="navbar-text user-chip">
                     <span class="badge bg-primary role-badge">{{ user.role|upper }}</span>
-                    <span class="username-text">{{ user.username }}</span>
+                    <span class="username-text">{{ user.display_name or user.source_name or user.username }}</span>
                 </span>
                 <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm logout-btn">Logout</a>
             </div>

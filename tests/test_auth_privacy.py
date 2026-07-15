@@ -4,7 +4,13 @@ from unittest.mock import patch
 import pandas as pd
 from werkzeug.security import generate_password_hash
 
-from run import create_app, _authenticate_user, _create_accounts_from_active_dataset, _managed_users_for_actor
+from run import (
+    create_app,
+    _authenticate_user,
+    _create_accounts_from_active_dataset,
+    _display_name_for_session_user,
+    _managed_users_for_actor,
+)
 
 
 class EmployeePrivacyTests(unittest.TestCase):
@@ -420,6 +426,51 @@ class EmployeePrivacyTests(unittest.TestCase):
         self.assertEqual(managed[0]["source_name"], "Ananya Sharma")
         self.assertEqual(managed[0]["company_email"], "ananya.sharma.tb1@talentbeacon.local")
         sync_user.assert_called_once()
+
+    def test_employee_nav_display_name_uses_uploaded_file_name(self):
+        user = {
+            "id": 5103,
+            "employee_id": "TB2",
+            "username": "employee.tb2",
+            "role": "employee",
+            "created_by": 10,
+            "source_employee_code": "active-dataset:2",
+            "source_employee_key": "file:file-hash:row:2",
+        }
+        df = pd.DataFrame([{
+            "Employee_ID": 2,
+            "Display_Employee_ID": 2,
+            "Employee_Code": "active-dataset:2",
+            "Name": "Rohan Mehta",
+            "Email": "",
+        }])
+        with patch("run._active_dataset_hash_for_actor", return_value="file-hash"), \
+             patch("run.load_active_employee_df", return_value=df):
+            self.assertEqual(_display_name_for_session_user(user), "Rohan Mehta")
+
+    def test_employee_nav_renders_uploaded_file_name(self):
+        user = {
+            "id": 5104,
+            "employee_id": "TB2",
+            "username": "employee.tb2",
+            "role": "employee",
+            "source_name": "Rohan Mehta",
+            "name_from_file": True,
+            "first_login": False,
+        }
+        with self.client.session_transaction() as session:
+            session["user"] = {
+                "id": user["id"],
+                "username": user["username"],
+                "role": user["role"],
+                "employee_id": user["employee_id"],
+            }
+        with patch("run._get_registered_user_by_id", return_value=user), \
+             patch("run._get_registered_user", return_value=user):
+            response = self.client.get("/career")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Rohan Mehta", response.data)
+        self.assertNotIn(b">employee.tb2</span>", response.data)
 
     def test_different_employee_file_does_not_reuse_same_row_account(self):
         users = [{

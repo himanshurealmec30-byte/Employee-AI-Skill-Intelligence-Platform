@@ -77,12 +77,18 @@ def create_app():
         else:
             registered_user = _get_registered_user_by_id(session_user.get("id")) or _get_registered_user(session_user.get("username"))
         if registered_user:
+            display_name = _display_name_for_session_user(registered_user)
             session["user"].update({
                 "id": registered_user["id"],
                 "username": registered_user["username"],
                 "role": registered_user["role"],
                 "employee_id": registered_user.get("employee_id"),
                 "source_employee_code": registered_user.get("source_employee_code"),
+                "source_employee_key": registered_user.get("source_employee_key"),
+                "source_name": registered_user.get("source_name"),
+                "name_from_file": registered_user.get("name_from_file"),
+                "created_by": registered_user.get("created_by"),
+                "display_name": display_name,
             })
             if registered_user.get("first_login") and request.endpoint not in {"first_login_page", "resend_first_login_otp_page", "logout", "static"}:
                 return redirect(url_for("first_login_page"))
@@ -162,6 +168,11 @@ def create_app():
                         "role": user["role"],
                         "employee_id": user.get("employee_id"),
                         "source_employee_code": user.get("source_employee_code"),
+                        "source_employee_key": user.get("source_employee_key"),
+                        "source_name": user.get("source_name"),
+                        "name_from_file": user.get("name_from_file"),
+                        "created_by": user.get("created_by"),
+                        "display_name": _display_name_for_session_user(user),
                     }
                     return redirect(url_for("first_login_page"))
                 session["user"] = {
@@ -170,6 +181,11 @@ def create_app():
                     "role": user["role"],
                     "employee_id": user.get("employee_id"),
                     "source_employee_code": user.get("source_employee_code"),
+                    "source_employee_key": user.get("source_employee_key"),
+                    "source_name": user.get("source_name"),
+                    "name_from_file": user.get("name_from_file"),
+                    "created_by": user.get("created_by"),
+                    "display_name": _display_name_for_session_user(user),
                 }
                 flash(f"Welcome, {user['username']}!", "success")
                 return redirect(url_for("dashboard"))
@@ -1104,6 +1120,54 @@ def _current_employee_dataset_id():
     if employee_id.isdigit():
         return int(employee_id)
     return None
+
+
+def _display_name_for_session_user(user):
+    if not user:
+        return ""
+    role = str(user.get("role") or "").lower()
+    if role != "employee":
+        return user.get("username") or ""
+
+    direct_name = _valid_employee_name(user.get("source_name"))
+    if direct_name:
+        return direct_name
+    if user.get("name_from_file"):
+        username_name = _valid_employee_name(user.get("username"))
+        if username_name:
+            return username_name
+
+    owner_id = user.get("created_by")
+    if not owner_id:
+        return user.get("username") or ""
+
+    try:
+        file_hash = _active_dataset_hash_for_actor(owner_id)
+        target_employee_id = str(user.get("employee_id") or "").strip().lower()
+        target_source_code = _stable_source_code(user.get("source_employee_code")).lower()
+        target_source_key = str(user.get("source_employee_key") or "").strip()
+        df = load_active_employee_df(user_id=owner_id)
+        for _, row_data in df.iterrows():
+            row = row_data.to_dict()
+            name = _valid_employee_name(row.get("Name"))
+            if not name:
+                continue
+            row_code = _stable_source_code(row.get("Employee_Code")).lower()
+            row_login_id = _employee_login_id_from_source(
+                row.get("Employee_Code"),
+                row.get("Display_Employee_ID"),
+                row.get("Employee_ID"),
+            ).lower()
+            row_key = _employee_identity_key(row, file_hash)
+            if (
+                (target_employee_id and row_login_id == target_employee_id)
+                or (target_source_code and row_code == target_source_code)
+                or (target_source_key and row_key == target_source_key)
+            ):
+                return name
+    except Exception:
+        pass
+    return user.get("username") or ""
 
 
 def _dataset_row_id_from_source(value):
