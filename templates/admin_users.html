@@ -84,6 +84,9 @@
                             {% else %}<span class="badge bg-success">Active</span>{% endif %}
                         </td>
                         <td>
+                            {% if item.generated_preview %}
+                                <span class="text-muted small">Save after refresh</span>
+                            {% else %}
                             <form class="d-flex gap-1" method="post" action="{{ url_for('admin_user_role_page', user_id=item.id) }}">
                                 <select name="role" class="form-select form-select-sm">
                                     {% for role in ['employee', 'manager', 'hr', 'admin'] %}
@@ -92,6 +95,7 @@
                                 </select>
                                 <button class="btn btn-sm btn-outline-primary" type="submit">Save</button>
                             </form>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}

@@ -512,12 +512,15 @@ def create_app():
             try:
                 account_result = _create_accounts_from_active_dataset(actor_id=owner_id)
                 if account_result["accounts"]:
-                    _store_generated_credentials(owner_id, account_result["accounts"])
-                    generated_accounts.extend(account_result["accounts"])
+                    generated_accounts = _dedupe_generated_accounts(generated_accounts + account_result["accounts"])
+                    _store_generated_credentials(owner_id, generated_accounts)
                     flash(f"Prepared {account_result['created']} employee login credentials from the active uploaded file.", "success")
                     all_managed_users = _managed_users_for_actor(owner_id)
             except Exception as exc:
                 flash(str(exc), "danger")
+        generated_accounts = _dedupe_generated_accounts(generated_accounts)
+        if not all_managed_users and generated_accounts:
+            all_managed_users = _generated_accounts_as_users(generated_accounts, actor_id=owner_id)
         total_managed_users = len(all_managed_users)
         start = (page - 1) * per_page
         managed_users = all_managed_users[start:start + per_page]
@@ -1574,7 +1577,7 @@ def _store_generated_credentials(actor_id, accounts):
     data = _load_generated_credentials()
     data[_credential_bucket_key(actor_id)] = {
         "created_at": _to_iso(_now()),
-        "accounts": accounts,
+        "accounts": _dedupe_generated_accounts(accounts),
     }
     _save_generated_credentials(data)
 
@@ -1586,7 +1589,43 @@ def _consume_generated_credentials(actor_id):
         bucket = data.pop("global", None)
     if bucket is not None:
         _save_generated_credentials(data)
-    return (bucket or {}).get("accounts", [])
+    return _dedupe_generated_accounts((bucket or {}).get("accounts", []))
+
+
+def _dedupe_generated_accounts(accounts):
+    unique = {}
+    for account in accounts or []:
+        email = str(account.get("company_email") or "").strip().lower()
+        employee_id = str(account.get("employee_id") or "").strip()
+        key = email or employee_id
+        if key:
+            unique[key] = account
+    return list(unique.values())
+
+
+def _generated_accounts_as_users(accounts, actor_id=None):
+    rows = []
+    for index, account in enumerate(_dedupe_generated_accounts(accounts), start=1):
+        company_email = str(account.get("company_email") or "").strip()
+        employee_id = str(account.get("employee_id") or "").strip()
+        if not company_email and not employee_id:
+            continue
+        rows.append({
+            "id": index,
+            "employee_id": employee_id,
+            "username": account.get("name") or "Employee",
+            "name_from_file": bool(_valid_employee_name(account.get("name"))),
+            "email": company_email,
+            "company_email": company_email,
+            "role": account.get("role") or "employee",
+            "first_login": True,
+            "locked_until": None,
+            "created_by": actor_id,
+            "created_from_upload": True,
+            "account_status": "pending_setup",
+            "generated_preview": True,
+        })
+    return rows
 
 
 def _get_registered_user(identity):
