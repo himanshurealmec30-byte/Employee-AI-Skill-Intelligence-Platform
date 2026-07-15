@@ -24,8 +24,7 @@
             {% endwith %}
             {% if is_demo and demo_otp %}
             <div class="alert alert-info auth-alert">
-                <strong>Demo Mode:</strong> In production, OTP will be sent to registered company email.
-                <div>OTP: <strong>{{ demo_otp }}</strong></div>
+                <strong>OTP:</strong> {{ demo_otp }}
             </div>
             {% endif %}
             <div class="alert alert-light border auth-alert">

@@ -485,7 +485,7 @@ def create_app():
         return render_template(
             "admin_datasets.html",
             upload_summary=upload_summary,
-            recent_datasets=_safe_dataset_uploads(),
+            recent_datasets=recent_datasets,
             user=session["user"],
         )
 
@@ -1726,6 +1726,8 @@ def _managed_users_for_actor(actor_id):
         if user.get("created_from_upload")
     ]
     active_employee_ids = set()
+    active_names_by_employee_id = {}
+    active_names_by_source_key = {}
     try:
         active_df = load_active_employee_df(user_id=actor_id)
         for _, row in active_df.iterrows():
@@ -1736,6 +1738,12 @@ def _managed_users_for_actor(actor_id):
             )
             if employee_id:
                 active_employee_ids.add(employee_id.lower())
+            file_name = _valid_employee_name(row.get("Name"))
+            if file_name and employee_id:
+                active_names_by_employee_id[employee_id.lower()] = file_name
+            source_key = _employee_identity_key(row, active_file_hash)
+            if file_name and source_key:
+                active_names_by_source_key[source_key] = file_name
     except Exception:
         active_employee_ids = set()
     active_dataset_users = [
@@ -1766,8 +1774,18 @@ def _managed_users_for_actor(actor_id):
             if str(user.get("created_by")) == str(actor_id)
             and str(user.get("source_file_hash") or "") == str(active_file_hash)
         ]
-    owned_users.sort(key=lambda user: (_employee_number_sort_key(user.get("employee_id")), str(user.get("created_at") or "")))
-    return owned_users
+    enriched_users = []
+    for user in owned_users:
+        display_name = active_names_by_employee_id.get(str(user.get("employee_id") or "").strip().lower())
+        if not display_name:
+            display_name = active_names_by_source_key.get(_user_employee_identity_key(user))
+        if display_name:
+            user = dict(user)
+            user["source_name"] = display_name
+            user["name_from_file"] = True
+        enriched_users.append(user)
+    enriched_users.sort(key=lambda user: (_employee_number_sort_key(user.get("employee_id")), str(user.get("created_at") or "")))
+    return enriched_users
 
 
 def _reset_visible_pending_accounts(actor_id, page=1, per_page=100):
@@ -1908,7 +1926,7 @@ def _upload_account_username(name, employee_id):
 def _display_generated_account(user, temporary_password, action="created"):
     return {
         "employee_id": user["employee_id"],
-        "name": user["username"],
+        "name": user.get("source_name") or user["username"],
         "company_email": user["company_email"],
         "temporary_password": temporary_password,
         "role": user["role"],
@@ -2090,6 +2108,9 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
                 if existing_user.get("username") != upload_username:
                     existing_user["username"] = upload_username
                     changed = True
+                if file_name and existing_user.get("source_name") != file_name:
+                    existing_user["source_name"] = file_name
+                    changed = True
                 if existing_user.get("employee_id"):
                     used_employee_ids.add(str(existing_user.get("employee_id")).strip().lower())
                 if bool(existing_user.get("name_from_file")) != has_file_name:
@@ -2132,6 +2153,7 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
             "source_employee_key": source_employee_key,
             "source_file_hash": active_file_hash,
             "source_email": source_email,
+            "source_name": file_name,
             "username": _upload_account_username(name, employee_id),
             "name_from_file": has_file_name,
             "email": company_email,

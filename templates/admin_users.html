@@ -58,7 +58,7 @@
                         <td>{{ item.employee_id or '-' }}</td>
                         <td>
                             {% if item.name_from_file %}
-                                {{ item.username }}
+                                {{ item.source_name or item.username }}
                             {% else %}
                                 <span class="text-muted small">Not provided in file</span>
                             {% endif %}

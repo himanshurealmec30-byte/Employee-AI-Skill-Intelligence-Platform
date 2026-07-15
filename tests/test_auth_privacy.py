@@ -126,7 +126,7 @@ class EmployeePrivacyTests(unittest.TestCase):
              patch("run._show_demo_otp", return_value=True):
             response = self.client.get("/first-login")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Demo Mode", response.data)
+        self.assertIn(b"OTP:", response.data)
         self.assertIn(b"123456", response.data)
 
     def test_first_login_page_regenerates_missing_demo_otp(self):
@@ -152,7 +152,7 @@ class EmployeePrivacyTests(unittest.TestCase):
              patch("run._issue_otp", return_value="654321"):
             response = self.client.get("/first-login")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Demo Mode", response.data)
+        self.assertIn(b"OTP:", response.data)
         self.assertIn(b"654321", response.data)
 
     def test_active_duplicate_employee_name_does_not_redirect_to_first_login(self):
