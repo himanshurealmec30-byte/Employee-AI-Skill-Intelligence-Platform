@@ -316,7 +316,7 @@ def create_app():
     def dashboard():
         if session["user"].get("role") == "employee":
             return redirect(url_for("career_page"))
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
         analytics = svc.get_analytics() if svc else {}
         upload_summary, recent_datasets, recent_jds = _safe_upload_dashboard()
         return render_template(
@@ -333,7 +333,7 @@ def create_app():
     @login_required
     @role_required("admin", "hr", "manager")
     def recommendations():
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
         roles = svc.get_analytics()["roles_available"] if svc else []
         return render_template("recommendations.html", roles=roles, user=session["user"])
 
@@ -357,7 +357,7 @@ def create_app():
     @login_required
     @role_required("admin", "hr")
     def analytics_page():
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
         analytics = svc.get_analytics() if svc else {}
         return render_template("analytics.html", analytics=analytics, user=session["user"])
 
@@ -464,10 +464,10 @@ def create_app():
             upload.filename = safe_name
             try:
                 result = process_dataset_upload(upload, uploaded_by=owner_id)
+                _refresh_talent_service(app)
                 account_result = _create_accounts_from_active_dataset(actor_id=owner_id, reset_existing_passwords=True)
                 if account_result["accounts"]:
                     _store_generated_credentials(owner_id, account_result["accounts"])
-                _refresh_talent_service(app)
                 account_message = f" Created {account_result['created']} employee login accounts. Open Users to view temporary passwords."
                 if is_ajax:
                     return jsonify({
@@ -775,7 +775,9 @@ def create_app():
     @login_required
     @role_required("admin", "manager")
     def api_match_role(role_name):
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
+        if not svc:
+            return jsonify({"error": "Upload and activate an employee file first."}), 400
         limit = request.args.get("limit", 10, type=int)
         results = svc.match_employees_to_role(role_name.replace("-", " "), limit=limit)
         return jsonify({"role": role_name, "recommendations": results})
@@ -784,7 +786,9 @@ def create_app():
     @login_required
     @role_required("admin", "manager")
     def api_match_project():
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
+        if not svc:
+            return jsonify({"error": "Upload and activate an employee file first."}), 400
         data = request.get_json() or {}
         skills = data.get("skills", [])
         min_exp = data.get("min_experience", 0)
@@ -907,7 +911,9 @@ def create_app():
     @login_required
     @role_required("admin", "hr")
     def api_analytics():
-        svc = app.config.get("service")
+        svc = _get_talent_service(app)
+        if not svc:
+            return jsonify({"error": "Upload and activate an employee file first."}), 400
         return jsonify(svc.get_analytics())
 
     @app.route("/api/admin/datasets")
@@ -1540,7 +1546,8 @@ def _sync_user_account_to_mysql(user):
 
         upsert_user_account(user)
         return True
-    except Exception:
+    except Exception as exc:
+        user["_mysql_sync_error"] = str(exc)
         return False
 
 
@@ -1550,7 +1557,9 @@ def _sync_user_accounts_to_mysql(users):
 
         upsert_user_accounts(users)
         return True
-    except Exception:
+    except Exception as exc:
+        for user in users:
+            user["_mysql_sync_error"] = str(exc)
         return False
 
 
@@ -1840,6 +1849,12 @@ def _batch_company_email(name, employee_id, used_emails):
         suffix += 1
 
 
+def _upload_account_username(name, employee_id):
+    slug_source = _valid_employee_name(name) or "employee"
+    slug = re.sub(r"[^a-z0-9]+", ".", slug_source.lower()).strip(".") or "employee"
+    return f"{slug}.{str(employee_id).lower()}"
+
+
 def _display_generated_account(user, temporary_password, action="created"):
     return {
         "employee_id": user["employee_id"],
@@ -2002,8 +2017,9 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
                 if active_file_hash and existing_user.get("source_file_hash") != active_file_hash:
                     existing_user["source_file_hash"] = active_file_hash
                     changed = True
-                if existing_user.get("username") != name:
-                    existing_user["username"] = name
+                upload_username = _upload_account_username(name, existing_user.get("employee_id"))
+                if existing_user.get("username") != upload_username:
+                    existing_user["username"] = upload_username
                     changed = True
                 if bool(existing_user.get("name_from_file")) != has_file_name:
                     existing_user["name_from_file"] = has_file_name
@@ -2020,7 +2036,7 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
                 existing_user["failed_attempts"] = 0
                 existing_user["locked_until"] = None
                 if not _sync_user_account_to_mysql(existing_user) and _requires_mysql_account_persistence():
-                    raise ValueError("Could not save refreshed employee password to the database.")
+                    raise ValueError(f"Could not save refreshed employee password to the database: {existing_user.get('_mysql_sync_error', 'unknown database error')}")
                 reset_accounts.append(_display_generated_account(existing_user, temporary_password, action="reset"))
                 changed = True
             else:
@@ -2044,7 +2060,7 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
             "source_employee_key": source_employee_key,
             "source_file_hash": active_file_hash,
             "source_email": source_email,
-            "username": name,
+            "username": _upload_account_username(name, employee_id),
             "name_from_file": has_file_name,
             "email": company_email,
             "company_email": company_email,
@@ -2064,7 +2080,7 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
         next_user_id += 1
         users.append(user)
         if not _sync_user_account_to_mysql(user) and _requires_mysql_account_persistence():
-            raise ValueError("Could not save employee login account to the database.")
+            raise ValueError(f"Could not save employee login account to the database: {user.get('_mysql_sync_error', 'unknown database error')}")
         used_emails.add(company_email)
         users_by_email[company_email] = user
         if source_employee_key:
