@@ -464,7 +464,7 @@ def create_app():
             upload.filename = safe_name
             try:
                 result = process_dataset_upload(upload, uploaded_by=owner_id)
-                account_result = _create_accounts_from_active_dataset(actor_id=owner_id)
+                account_result = _create_accounts_from_active_dataset(actor_id=owner_id, reset_existing_passwords=True)
                 if account_result["accounts"]:
                     _store_generated_credentials(owner_id, account_result["accounts"])
                 _refresh_talent_service(app)
@@ -510,7 +510,7 @@ def create_app():
         all_managed_users = _managed_users_for_actor(owner_id)
         if not all_managed_users and _active_dataset_id_for_actor(owner_id):
             try:
-                account_result = _create_accounts_from_active_dataset(actor_id=owner_id)
+                account_result = _create_accounts_from_active_dataset(actor_id=owner_id, reset_existing_passwords=True)
                 if account_result["accounts"]:
                     generated_accounts = _dedupe_generated_accounts(generated_accounts + account_result["accounts"])
                     _store_generated_credentials(owner_id, generated_accounts)
@@ -555,7 +555,7 @@ def create_app():
         try:
             page = max(_safe_int(request.args.get("page") or 1, 1), 1)
             per_page = min(max(_safe_int(request.args.get("per_page") or 100, 100), 25), 500)
-            result = _create_accounts_from_active_dataset(actor_id=owner_id)
+            result = _create_accounts_from_active_dataset(actor_id=owner_id, reset_existing_passwords=True)
             if not result["accounts"]:
                 result = _reset_visible_pending_accounts(owner_id, page=page, per_page=per_page)
                 flash(f"Prepared {result.get('reset', 0)} fresh pending employee login credentials for this page. {result['skipped']} completed accounts were kept.", "success")
@@ -1554,6 +1554,11 @@ def _sync_user_accounts_to_mysql(users):
         return False
 
 
+def _requires_mysql_account_persistence():
+    host = str(getattr(config, "MYSQL_HOST", "") or "").strip().lower()
+    return bool(getattr(config, "MYSQL_READS_ENABLED", False)) and host not in {"", "localhost", "127.0.0.1", "::1"}
+
+
 def _credential_bucket_key(actor_id):
     return str(actor_id or "global")
 
@@ -2014,7 +2019,8 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
                 existing_user["temp_password_expires_at"] = _to_iso(_now() + timedelta(hours=TEMP_PASSWORD_HOURS))
                 existing_user["failed_attempts"] = 0
                 existing_user["locked_until"] = None
-                _sync_user_account_to_mysql(existing_user)
+                if not _sync_user_account_to_mysql(existing_user) and _requires_mysql_account_persistence():
+                    raise ValueError("Could not save refreshed employee password to the database.")
                 reset_accounts.append(_display_generated_account(existing_user, temporary_password, action="reset"))
                 changed = True
             else:
@@ -2057,7 +2063,8 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
         }
         next_user_id += 1
         users.append(user)
-        _sync_user_account_to_mysql(user)
+        if not _sync_user_account_to_mysql(user) and _requires_mysql_account_persistence():
+            raise ValueError("Could not save employee login account to the database.")
         used_emails.add(company_email)
         users_by_email[company_email] = user
         if source_employee_key:
