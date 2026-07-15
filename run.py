@@ -212,6 +212,10 @@ def create_app():
                 return redirect(url_for("login"))
             except Exception as exc:
                 flash(str(exc), "danger")
+        if _show_demo_otp() and not session.get("first_login_demo_otp"):
+            demo_otp = _issue_otp(user, "first_login")
+            session["first_login_demo_otp"] = demo_otp
+            user = _get_registered_user_by_id(user_id) or user
         return render_template(
             "first_login.html",
             user=user,

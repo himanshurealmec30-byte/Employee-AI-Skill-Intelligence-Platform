@@ -129,6 +129,32 @@ class EmployeePrivacyTests(unittest.TestCase):
         self.assertIn(b"Demo Mode", response.data)
         self.assertIn(b"123456", response.data)
 
+    def test_first_login_page_regenerates_missing_demo_otp(self):
+        user = {
+            "id": 777003,
+            "username": "first login missing otp",
+            "role": "employee",
+            "employee_id": "TB777003",
+            "company_email": "employee.777003@talentbeacon.local",
+            "first_login": True,
+            "otp_expires_at": "2099-01-01T00:05:00+00:00",
+        }
+        with self.client.session_transaction() as session:
+            session["user"] = {
+                "id": user["id"],
+                "username": user["username"],
+                "role": user["role"],
+                "employee_id": user.get("employee_id"),
+            }
+            session["first_login_user_id"] = user["id"]
+        with patch("run._get_registered_user_by_id", return_value=user), \
+             patch("run._show_demo_otp", return_value=True), \
+             patch("run._issue_otp", return_value="654321"):
+            response = self.client.get("/first-login")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Demo Mode", response.data)
+        self.assertIn(b"654321", response.data)
+
     def test_active_duplicate_employee_name_does_not_redirect_to_first_login(self):
         pending_same_name = {
             "id": 777010,
