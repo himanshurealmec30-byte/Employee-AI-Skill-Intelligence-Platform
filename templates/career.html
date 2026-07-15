@@ -75,6 +75,9 @@ async function loadEmployeeProfile() {
         const res = await fetch(`/api/employee/${id}/intelligence`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Unable to load profile.');
+        const profileName = data.employee && data.employee.name;
+        const navName = document.querySelector('.username-text');
+        if (profileName && navName) navName.textContent = profileName;
         el.innerHTML = renderEmployeeProfile(data);
     } catch (error) {
         el.innerHTML = `<div class="alert alert-danger mb-0">${escapeHtml(error.message)}</div>`;
