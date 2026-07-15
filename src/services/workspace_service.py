@@ -420,7 +420,32 @@ def process_dataset_upload(file_storage, uploaded_by=None):
 
 def list_dataset_uploads(limit=100, user_id=None):
     state = _prune_missing_datasets(_load_state())
-    return _user_datasets(state, user_id)[:limit]
+    datasets = _user_datasets(state, user_id)
+    if not datasets and getattr(config, "MYSQL_READS_ENABLED", False):
+        try:
+            from src.db.repository import get_dataset_uploads
+
+            datasets = [
+                {
+                    "id": str(dataset.get("id")),
+                    "mysql_upload_id": dataset.get("id"),
+                    "filename": dataset.get("filename"),
+                    "stored_filename": dataset.get("stored_filename"),
+                    "file_path": dataset.get("file_path"),
+                    "file_type": dataset.get("file_type"),
+                    "row_count": int(dataset.get("row_count") or 0),
+                    "uploaded_by": dataset.get("uploaded_by"),
+                    "is_active": bool(dataset.get("is_active")),
+                    "uploaded_at": str(dataset.get("uploaded_at") or ""),
+                }
+                for dataset in get_dataset_uploads(limit=limit)
+                if user_id is None
+                or dataset.get("uploaded_by") == user_id
+                or dataset.get("uploaded_by") is None
+            ]
+        except Exception:
+            datasets = []
+    return datasets[:limit]
 
 
 def get_active_dataset(user_id=None):
@@ -475,6 +500,29 @@ def activate_dataset(upload_id, user_id=None):
             if dataset["is_active"]:
                 found = dataset
     if not found:
+        if getattr(config, "MYSQL_READS_ENABLED", False):
+            try:
+                from src.db.repository import activate_dataset_upload, get_dataset_upload
+
+                mysql_upload_id = int(str(upload_id))
+                activate_dataset_upload(mysql_upload_id, uploaded_by=user_id)
+                upload = get_dataset_upload(mysql_upload_id)
+                if upload:
+                    state.setdefault("active_dataset_ids", {})[_owner_key(user_id) or "global"] = str(upload.get("id"))
+                    state["active_dataset_id"] = str(upload.get("id"))
+                    _save_state(state)
+                    return {
+                        "id": str(upload.get("id")),
+                        "mysql_upload_id": upload.get("id"),
+                        "filename": upload.get("filename"),
+                        "file_type": upload.get("file_type"),
+                        "row_count": int(upload.get("row_count") or 0),
+                        "uploaded_by": upload.get("uploaded_by"),
+                        "is_active": True,
+                        "uploaded_at": str(upload.get("uploaded_at") or ""),
+                    }
+            except Exception as exc:
+                raise ValueError(f"Could not activate uploaded file: {exc}") from exc
         raise ValueError("Uploaded employee file not found.")
     state.setdefault("active_dataset_ids", {})[_owner_key(user_id) or "global"] = found["id"]
     state["active_dataset_id"] = found["id"]
@@ -505,6 +553,26 @@ def delete_dataset(upload_id, user_id=None):
         else:
             kept.append(dataset)
     if not removed:
+        if getattr(config, "MYSQL_READS_ENABLED", False):
+            try:
+                from src.db.repository import delete_dataset_upload
+
+                removed = delete_dataset_upload(int(str(upload_id)))
+                if not removed:
+                    raise ValueError("Uploaded employee file not found.")
+                _save_state(state)
+                return {
+                    "id": str(removed.get("id")),
+                    "mysql_upload_id": removed.get("id"),
+                    "filename": removed.get("filename"),
+                    "file_type": removed.get("file_type"),
+                    "row_count": int(removed.get("row_count") or 0),
+                    "uploaded_by": removed.get("uploaded_by"),
+                    "is_active": False,
+                    "uploaded_at": str(removed.get("uploaded_at") or ""),
+                }
+            except Exception as exc:
+                raise ValueError(f"Could not delete uploaded file: {exc}") from exc
         raise ValueError("Uploaded employee file not found.")
     Path(removed.get("file_path", "")).unlink(missing_ok=True)
     state["datasets"] = kept
