@@ -1940,6 +1940,14 @@ def _batch_company_email(name, employee_id, used_emails):
         suffix += 1
 
 
+def _is_generic_upload_email(email):
+    email = str(email or "").strip().lower()
+    if not email.endswith("@talentbeacon.local"):
+        return False
+    local = email.split("@", 1)[0]
+    return local.startswith("employee.")
+
+
 def _upload_account_username(name, employee_id):
     slug_source = _valid_employee_name(name) or "employee"
     slug = re.sub(r"[^a-z0-9]+", ".", slug_source.lower()).strip(".") or "employee"
@@ -2133,6 +2141,24 @@ def _create_accounts_from_active_dataset(actor_id=None, reset_existing_passwords
                     changed = True
                 if file_name and existing_user.get("source_name") != file_name:
                     existing_user["source_name"] = file_name
+                    changed = True
+                current_email = str(existing_user.get("company_email") or existing_user.get("email") or "").strip().lower()
+                used_without_current = set(used_emails)
+                for current_value in (existing_user.get("email"), existing_user.get("company_email")):
+                    used_without_current.discard(str(current_value or "").strip().lower())
+                desired_email = ""
+                if source_email and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", source_email):
+                    desired_email = source_email
+                elif file_name and _is_generic_upload_email(current_email):
+                    desired_email = _batch_company_email(file_name, existing_user.get("employee_id"), used_without_current)
+                desired_email = str(desired_email or "").strip().lower()
+                if desired_email and desired_email != current_email and desired_email not in used_without_current:
+                    used_emails.discard(str(existing_user.get("email") or "").strip().lower())
+                    used_emails.discard(str(existing_user.get("company_email") or "").strip().lower())
+                    existing_user["email"] = desired_email
+                    existing_user["company_email"] = desired_email
+                    used_emails.add(desired_email)
+                    users_by_email[desired_email] = existing_user
                     changed = True
                 if existing_user.get("employee_id"):
                     used_employee_ids.add(str(existing_user.get("employee_id")).strip().lower())

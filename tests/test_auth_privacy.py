@@ -347,6 +347,45 @@ class EmployeePrivacyTests(unittest.TestCase):
         self.assertEqual(users[0]["company_email"], "employee.1.tb1001@talentbeacon.local")
         self.assertFalse(users[0]["first_login"])
 
+    def test_named_employee_file_updates_generic_generated_email(self):
+        users = [{
+            "id": 5101,
+            "employee_id": "TB1",
+            "username": "employee.tb1",
+            "email": "employee.1.tb1@talentbeacon.local",
+            "company_email": "employee.1.tb1@talentbeacon.local",
+            "password_hash": generate_password_hash("TempPass123!"),
+            "role": "employee",
+            "first_login": True,
+            "created_by": 10,
+            "created_from_upload": True,
+            "source_dataset_id": "old-dataset",
+            "source_employee_code": "old-dataset:1",
+            "source_employee_key": "file:same-file-hash:row:1",
+            "source_file_hash": "same-file-hash",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }]
+        df = pd.DataFrame([{
+            "Employee_ID": 999,
+            "Display_Employee_ID": 1,
+            "Employee_Code": "new-dataset:1",
+            "Name": "Ananya Sharma",
+            "Email": "",
+        }])
+        with patch("run._active_dataset_id_for_actor", return_value="new-dataset"), \
+             patch("run._active_dataset_hash_for_actor", return_value="same-file-hash"), \
+             patch("run.load_active_employee_df", return_value=df), \
+             patch("run._load_registered_users", return_value=users), \
+             patch("run._save_registered_users"), \
+             patch("run._sync_user_accounts_to_mysql", return_value=True), \
+             patch("run._audit"):
+            result = _create_accounts_from_active_dataset(actor_id=10, reset_existing_passwords=False)
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(users[0]["source_name"], "Ananya Sharma")
+        self.assertEqual(users[0]["username"], "ananya.sharma.tb1")
+        self.assertEqual(users[0]["company_email"], "ananya.sharma.tb1@talentbeacon.local")
+
     def test_different_employee_file_does_not_reuse_same_row_account(self):
         users = [{
             "id": 5001,
