@@ -1660,15 +1660,24 @@ def _find_password_reset_user(identity):
 
 def _managed_users_for_actor(actor_id):
     active_dataset_id = _active_dataset_id_for_actor(actor_id)
-    if not active_dataset_id:
+    active_file_hash = _active_dataset_hash_for_actor(actor_id)
+    if not active_dataset_id and not active_file_hash:
         return []
-    users = _load_registered_users_from_mysql()
-    if not users:
-        users = _load_registered_users_from_json()
-    active_dataset_users = [
+    users = _load_registered_users()
+    upload_users = [
         user for user in users
         if user.get("created_from_upload")
-        and str(user.get("source_dataset_id") or "") == str(active_dataset_id)
+    ]
+    active_dataset_users = [
+        user for user in upload_users
+        if (
+            active_dataset_id
+            and str(user.get("source_dataset_id") or "") == str(active_dataset_id)
+        )
+        or (
+            active_file_hash
+            and str(user.get("source_file_hash") or "") == str(active_file_hash)
+        )
     ]
     owned_users = [
         user for user in active_dataset_users
@@ -1676,6 +1685,12 @@ def _managed_users_for_actor(actor_id):
     ]
     if not owned_users:
         owned_users = active_dataset_users
+    if not owned_users and active_file_hash:
+        owned_users = [
+            user for user in upload_users
+            if str(user.get("created_by")) == str(actor_id)
+            and str(user.get("source_file_hash") or "") == str(active_file_hash)
+        ]
     owned_users.sort(key=lambda user: (_employee_number_sort_key(user.get("employee_id")), str(user.get("created_at") or "")))
     return owned_users
 
